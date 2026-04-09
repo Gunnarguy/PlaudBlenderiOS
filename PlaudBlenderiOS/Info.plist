@@ -3,13 +3,23 @@
 <plist version="1.0">
 <dict>
 	<key>ChronosServerURL</key>
-	<string>https://glairy-ona-irreplaceable.ngrok-free.dev</string>
+	<string>http://10.0.0.170:8000</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>PlaudBlender connects to your Chronos server on your local network.</string>
+	<string>PlaudBlender connects to your Chronos server on your local network or via Tailscale VPN.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>10.0.0.170</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>CFBundleURLTypes</key>
 	<array>

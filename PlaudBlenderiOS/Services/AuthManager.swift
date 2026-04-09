@@ -12,20 +12,16 @@ final class AuthManager: Sendable {
     private static let localLoopbackURL = "http://127.0.0.1:8000"
     private static let serverURLInfoPlistKey = "ChronosServerURL"
 
-    /// Detect the Mac's LAN IP for simulator use.
-    /// localhost/127.0.0.1 doesn't reliably work from the iOS simulator.
-    /// Falls back to localhost if no Wi-Fi/Ethernet IP is found.
+    /// Pi's known LAN IP and Tailscale IP for fallback probing.
+    private static let piLanURL = "http://10.0.0.170:8000"
+
+    /// Default server URL — uses Info.plist value, then falls back to Pi LAN IP.
     static var defaultServerURL: String {
         if let configuredServerURL = Self.configuredServerURL {
             return configuredServerURL
         }
-
-        #if targetEnvironment(simulator)
-        if let lanIP = Self.detectLanIP() {
-            return "http://\(lanIP):8000"
-        }
-        #endif
-        return Self.localLoopbackURL
+        // On real devices, default to the Pi's LAN IP
+        return piLanURL
     }
 
     var isAuthenticated: Bool {
@@ -55,21 +51,27 @@ final class AuthManager: Sendable {
     func candidateServerURLs() -> [String] {
         var candidates: [String] = []
 
+        // 1. User-stored URL (from Settings)
         if let storedURL = Self.preferredServerURL(from: KeychainService.load(key: Self.serverURLKey)) {
             candidates.append(storedURL)
         }
 
+        // 2. Info.plist configured URL
         if let configuredServerURL = Self.configuredServerURL {
             candidates.append(configuredServerURL)
         }
 
+        // 3. Pi's known LAN IP (works when on home Wi-Fi)
+        candidates.append(Self.piLanURL)
+
+        // 4. Tailscale IP (works from anywhere if Tailscale is running)
+        // Users set this via Settings; it gets stored in Keychain and appears as #1 above.
+
+        // 5. Simulator-only: detect Mac's LAN IP for local dev
         #if targetEnvironment(simulator)
         if let lanIP = Self.detectLanIP() {
             candidates.append("http://\(lanIP):8000")
         }
-        #endif
-
-        #if targetEnvironment(simulator)
         candidates.append(Self.localLoopbackURL)
         candidates.append("http://localhost:8000")
         #endif
