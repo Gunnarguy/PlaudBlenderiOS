@@ -180,6 +180,9 @@ final class APIClient: Sendable {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
+        // Required for ngrok free-tier to skip the browser interstitial page
+        request.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
+
         let requestId = UUID().uuidString.prefix(8).lowercased()
         request.setValue("ios-\(requestId)", forHTTPHeaderField: "X-Request-ID")
 
@@ -282,6 +285,7 @@ final class APIClient: Sendable {
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
             request.timeoutInterval = 5
+            request.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
 
             let start = CFAbsoluteTimeGetCurrent()
             let (data, response) = try await session.data(for: request)

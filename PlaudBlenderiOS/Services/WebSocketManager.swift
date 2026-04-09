@@ -25,6 +25,7 @@ final class WebSocketManager {
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        request.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
 
         wsTask = URLSession.shared.webSocketTask(with: request)
         wsTask?.resume()
