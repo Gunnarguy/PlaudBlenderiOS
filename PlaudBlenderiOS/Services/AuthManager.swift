@@ -12,16 +12,17 @@ final class AuthManager: Sendable {
     private static let localLoopbackURL = "http://127.0.0.1:8000"
     private static let serverURLInfoPlistKey = "ChronosServerURL"
 
-    /// Pi's known LAN IP and Tailscale IP for fallback probing.
+    /// Pi's known LAN IP for fast local access on home Wi-Fi.
     private static let piLanURL = "http://10.0.0.170:8000"
+    /// ngrok tunnel — works from anywhere (cell, work, etc.)
+    private static let ngrokURL = "https://glairy-ona-irreplaceable.ngrok-free.dev"
 
-    /// Default server URL — uses Info.plist value, then falls back to Pi LAN IP.
+    /// Default server URL — uses Info.plist value (ngrok), then falls back.
     static var defaultServerURL: String {
         if let configuredServerURL = Self.configuredServerURL {
             return configuredServerURL
         }
-        // On real devices, default to the Pi's LAN IP
-        return piLanURL
+        return ngrokURL
     }
 
     var isAuthenticated: Bool {
@@ -61,10 +62,13 @@ final class AuthManager: Sendable {
             candidates.append(configuredServerURL)
         }
 
-        // 3. Pi's known LAN IP (works when on home Wi-Fi)
+        // 3. ngrok tunnel (works from anywhere — cell, work, etc.)
+        candidates.append(Self.ngrokURL)
+
+        // 4. Pi's LAN IP (faster when on home Wi-Fi)
         candidates.append(Self.piLanURL)
 
-        // 4. Tailscale IP (works from anywhere if Tailscale is running)
+        // 5. Tailscale IP (works from anywhere if Tailscale is running)
         // Users set this via Settings; it gets stored in Keychain and appears as #1 above.
 
         // 5. Simulator-only: detect Mac's LAN IP for local dev
