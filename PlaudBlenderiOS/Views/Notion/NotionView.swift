@@ -40,12 +40,7 @@ struct NotionView: View {
 
             VStack(spacing: 10) {
                 Button {
-                    Task {
-                        guard let scene = UIApplication.shared.connectedScenes
-                            .compactMap({ $0 as? UIWindowScene }).first,
-                              let window = scene.windows.first else { return }
-                        await viewModel.startOAuthFlow(anchor: window)
-                    }
+                    startOAuthFlow()
                 } label: {
                     Label(viewModel.isAuthorizing ? "Authorizing..." : "Connect Notion", systemImage: "person.badge.key")
                         .frame(maxWidth: .infinity)
@@ -73,9 +68,20 @@ struct NotionView: View {
                         .font(.headline)
                     Text(viewModel.workspaceName ?? "Authenticated with Notion")
                         .font(.subheadline)
+                    Text(viewModel.authModeLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text("Pick the database Chronos should sync from. This is the step that actually connects Notion content into the app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Button {
+                        startOAuthFlow()
+                    } label: {
+                        Label(viewModel.usesOAuth ? "Reconnect OAuth" : "Connect with OAuth", systemImage: "person.badge.key")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.isAuthorizing)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
@@ -159,6 +165,9 @@ struct NotionView: View {
                     VStack(alignment: .leading) {
                         Text("Connected")
                             .font(.headline)
+                        Text(viewModel.authModeLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         if let db = status.databaseTitle {
                             Text(db)
                                 .font(.caption)
@@ -171,9 +180,21 @@ struct NotionView: View {
                         }
                     }
                     Spacer()
-                    Text("\(status.totalPages) pages")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Text("\(status.totalPages) pages")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            startOAuthFlow()
+                        } label: {
+                            Text(viewModel.usesOAuth ? "Reconnect OAuth" : "Connect OAuth")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(viewModel.isAuthorizing)
+                    }
                 }
                 .padding()
                 .background(.green.opacity(0.05))
@@ -397,6 +418,15 @@ struct NotionView: View {
         HStack(spacing: 4) {
             Circle().fill(color).frame(width: 8, height: 8)
             Text(label)
+        }
+    }
+
+    private func startOAuthFlow() {
+        Task {
+            guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).first,
+                  let window = scene.windows.first else { return }
+            await viewModel.startOAuthFlow(anchor: window)
         }
     }
 

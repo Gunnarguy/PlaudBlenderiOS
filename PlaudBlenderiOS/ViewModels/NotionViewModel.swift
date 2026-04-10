@@ -47,6 +47,18 @@ final class NotionViewModel: NSObject {
         authStatus?.workspaceName ?? authStatus?.extra?["workspace_name"]?.stringValue
     }
 
+    var authMode: String {
+        authStatus?.extra?["auth_mode"]?.stringValue ?? "none"
+    }
+
+    var usesOAuth: Bool {
+        authMode == "oauth"
+    }
+
+    var usesIntegrationToken: Bool {
+        authMode == "integration_token"
+    }
+
     var hasSelectedDatabase: Bool {
         status?.isConnected == true
     }
@@ -71,6 +83,17 @@ final class NotionViewModel: NSObject {
             return workspaceName
         }
         return "Not connected"
+    }
+
+    var authModeLabel: String {
+        switch authMode {
+        case "oauth":
+            return "Connected via OAuth"
+        case "integration_token":
+            return "Using server integration token"
+        default:
+            return "Not connected"
+        }
     }
 
     func loadAuthStatus() async {

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Environment(NotionViewModel.self) private var notion
     @Bindable var viewModel: SettingsViewModel
 
     var body: some View {
@@ -67,14 +68,35 @@ struct SettingsView: View {
                                 .foregroundStyle(status.isAuthenticated ? .green : .red)
                             Text(status.isAuthenticated ? "Connected" : "Not Connected")
                         }
+                        if let authMode = status.extra?["auth_mode"]?.stringValue {
+                            Text(authMode == "integration_token" ? "Using server integration token" : "Connected via OAuth")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         if let ws = status.workspaceName {
                             Text("Workspace: \(ws)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+
+                        Button {
+                            startNotionOAuth()
+                        } label: {
+                            Label(notion.usesOAuth ? "Reconnect OAuth" : "Connect with OAuth", systemImage: "person.badge.key")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(notion.isAuthorizing)
                     } else {
                         Text("Status unknown")
                             .foregroundStyle(.secondary)
+
+                        Button {
+                            startNotionOAuth()
+                        } label: {
+                            Label("Connect with OAuth", systemImage: "person.badge.key")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(notion.isAuthorizing)
                     }
                 }
 
@@ -153,6 +175,15 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(ok ? .green : .red)
             }
+        }
+    }
+
+    private func startNotionOAuth() {
+        Task {
+            guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).first,
+                  let window = scene.windows.first else { return }
+            await notion.startOAuthFlow(anchor: window)
         }
     }
 }
