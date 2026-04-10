@@ -123,6 +123,80 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Server Config") {
+                    if viewModel.isLoadingServerConfig {
+                        HStack {
+                            ProgressView()
+                            Text("Loading server settings…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("These values write directly to the Chronos server .env.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Models") {
+                    configField("Processing Provider", text: $viewModel.processingProvider)
+                    configField("Cleaning Model", text: $viewModel.cleaningModel)
+                    configField("Analyst Model", text: $viewModel.analystModel)
+                    configField("Embedding Model", text: $viewModel.embeddingModel)
+                    configField("OpenAI Model", text: $viewModel.openAIModel)
+                    configField("Thinking Level", text: $viewModel.thinkingLevel)
+                }
+
+                Section("Runtime") {
+                    configField("OpenAI Temperature", text: $viewModel.openAITemperature, keyboard: .decimalPad)
+                    configField("Embedding Dimension", text: $viewModel.embeddingDim, keyboard: .numberPad)
+                    configField("Plaud Language", text: $viewModel.plaudLanguage)
+                    Toggle("Plaud Diarization", isOn: $viewModel.plaudDiarization)
+                    configField("Log Level", text: $viewModel.logLevel)
+                }
+
+                Section("Categories And Notion") {
+                    configField("Custom Categories", text: $viewModel.customCategories)
+                    configField("Weekday Start", text: $viewModel.notionWeekdayStart)
+                    configField("Weekend Start", text: $viewModel.notionWeekendStart)
+                }
+
+                Section("Vector DB") {
+                    configField("Qdrant URL", text: $viewModel.qdrantURL, keyboard: .URL)
+                    configField("Collection", text: $viewModel.qdrantCollectionName)
+                }
+
+                Section("Credential Status") {
+                    credentialRow("Gemini API Key", present: viewModel.hasGeminiAPIKey)
+                    credentialRow("OpenAI API Key", present: viewModel.hasOpenAIAPIKey)
+                    credentialRow("Qdrant API Key", present: viewModel.hasQdrantAPIKey)
+                    credentialRow("Notion Token", present: viewModel.hasNotionToken)
+                    credentialRow("Notion OAuth", present: viewModel.hasNotionOAuth)
+                }
+
+                Section("Save Server Config") {
+                    Button {
+                        Task { await viewModel.saveServerSettings() }
+                    } label: {
+                        HStack {
+                            Spacer()
+                            if viewModel.isSavingServerConfig {
+                                ProgressView()
+                            } else {
+                                Label("Save To Server", systemImage: "externaldrive.badge.checkmark")
+                            }
+                            Spacer()
+                        }
+                    }
+                    .disabled(viewModel.isSavingServerConfig || viewModel.isLoadingServerConfig)
+
+                    if let serverConfigMessage = viewModel.serverConfigMessage {
+                        Text(serverConfigMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 // About
                 Section("About") {
                     HStack {
@@ -175,6 +249,34 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(ok ? .green : .red)
             }
+        }
+    }
+
+    private func configField(
+        _ title: String,
+        text: Binding<String>,
+        keyboard: UIKeyboardType = .default
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, text: text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(keyboard)
+        }
+    }
+
+    private func credentialRow(_ title: String, present: Bool) -> some View {
+        HStack {
+            Image(systemName: present ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(present ? .green : .red)
+            Text(title)
+            Spacer()
+            Text(present ? "Present" : "Missing")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
