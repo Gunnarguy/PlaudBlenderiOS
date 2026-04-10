@@ -9,9 +9,11 @@ final class SyncViewModel {
     var workflowStats: WorkflowStats?
     var uploadCandidates: [UploadCandidate] = []
     var syncFailures: SyncFailureSummary?
+    var systemStatus: SystemStatus?
     var stackControl: StackControlResponse?
     var backups: [AdminBackupInfo] = []
     var downloadedBackupURL: URL?
+    var isLoadingSystemStatus = false
     var isLoading = false
     var isRunning = false
     var isRunningStackAction = false
@@ -101,6 +103,28 @@ final class SyncViewModel {
 
     var shouldShowGlobalBanner: Bool {
         isRunning || hasVisibleWorkInProgress
+    }
+
+    /// Number of healthy services out of 6
+    var healthyServiceCount: Int {
+        guard let sys = systemStatus else { return 0 }
+        var count = 0
+        if sys.database?.ok == true { count += 1 }
+        if sys.qdrant?.ok == true { count += 1 }
+        if sys.gemini?.isUp == true { count += 1 }
+        if sys.openai?.ok == true { count += 1 }
+        if sys.plaud?.isUp == true { count += 1 }
+        if sys.notion?.isUp == true { count += 1 }
+        return count
+    }
+
+    /// True when all pipeline-critical services (Database, Qdrant, at least one AI) are healthy
+    var pipelineReady: Bool {
+        guard let sys = systemStatus else { return false }
+        let dbOk = sys.database?.ok == true
+        let qdrantOk = sys.qdrant?.ok == true
+        let aiOk = (sys.gemini?.isUp == true) || (sys.openai?.ok == true)
+        return dbOk && qdrantOk && aiOk
     }
 
     var hasVisibleWorkInProgress: Bool {
@@ -242,6 +266,16 @@ final class SyncViewModel {
         }
     }
 
+    func loadSystemStatus() async {
+        isLoadingSystemStatus = true
+        do {
+            systemStatus = try await api.get("/api/status")
+        } catch {
+            systemStatus = nil
+        }
+        isLoadingSystemStatus = false
+    }
+
     func refreshCache() async {
         do {
             let response: SuccessResponse = try await api.post("/api/sync/refresh-cache")
@@ -315,6 +349,7 @@ final class SyncViewModel {
         await loadUploadCandidates()
         await loadSyncFailures()
         await loadBackups()
+        await loadSystemStatus()
         isLoading = false
     }
 

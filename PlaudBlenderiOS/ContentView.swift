@@ -173,7 +173,12 @@ struct ContentView: View {
     }
 
     private var dataTabBadge: String? {
-        // Sync badge takes priority
+        // Service health warning takes priority
+        if let sys = sync.systemStatus, sync.healthyServiceCount < 6, !sync.isRunning {
+            let down = 6 - sync.healthyServiceCount
+            return "\(down)"
+        }
+        // Sync badge
         if sync.isRunning {
             let pending = sync.dbStats?.pending ?? 0
             if pending > 0 { return "\(pending)" }

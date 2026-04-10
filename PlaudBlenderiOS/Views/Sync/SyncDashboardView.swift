@@ -19,6 +19,22 @@ struct SyncDashboardView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
+                    // 0. Service health bar — unified integration status
+                    ServiceStatusBar(
+                        systemStatus: viewModel.systemStatus,
+                        isLoading: viewModel.isLoadingSystemStatus
+                    ) {
+                        await viewModel.loadSystemStatus()
+                    }
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal)
+
+                    // Qdrant / pipeline readiness warning
+                    if let sys = viewModel.systemStatus, !viewModel.pipelineReady {
+                        pipelineReadinessWarning(sys)
+                    }
+
                     // 1. Hero — status + actions + inline stats
                     heroCard
 
@@ -656,6 +672,32 @@ struct SyncDashboardView: View {
             Label("Admin Controls", systemImage: "wrench.and.screwdriver")
                 .font(.subheadline.weight(.semibold))
 
+            // Qdrant detail inline when available
+            if let qdrant = viewModel.systemStatus?.qdrant {
+                HStack(spacing: 8) {
+                    Image(systemName: qdrant.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(qdrant.ok ? .green : .red)
+                        .font(.caption)
+                    Text("Qdrant")
+                        .font(.caption.weight(.medium))
+                    if let collections = qdrant.collections {
+                        Text("· \(collections) collection\(collections == 1 ? "" : "s")")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let url = qdrant.url {
+                        Spacer()
+                        Text(url)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(8)
+                .background(qdrant.ok ? .green.opacity(0.08) : .red.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             HStack(spacing: 8) {
                 adminButton("Stack Status") {
                     Task { await viewModel.runStackAction("status") }
@@ -897,6 +939,49 @@ struct SyncDashboardView: View {
     }
 
     // MARK: - Shared Helpers
+
+    private func pipelineReadinessWarning(_ sys: SystemStatus) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Pipeline Not Ready")
+                    .font(.subheadline.weight(.semibold))
+            }
+
+            if sys.database?.ok != true {
+                warningLine("Database is down", detail: sys.database?.error)
+            }
+            if sys.qdrant?.ok != true {
+                warningLine("Qdrant is not connected", detail: sys.qdrant?.error)
+            }
+            if sys.gemini?.isUp != true && sys.openai?.ok != true {
+                warningLine("No AI provider available", detail: "Both Gemini and OpenAI are down")
+            }
+        }
+        .padding()
+        .background(.orange.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    private func warningLine(_ message: String, detail: String?) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+                .font(.caption)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(message)
+                    .font(.caption.weight(.medium))
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
 
     private func sourceColor(_ source: String) -> Color {
         switch source {

@@ -100,26 +100,13 @@ struct SettingsView: View {
                     }
                 }
 
-                // System health — deep connectivity check
+                // System health — deep connectivity check (unified bar)
                 Section("System Health") {
-                    if viewModel.isLoadingSystemStatus {
-                        HStack {
-                            ProgressView()
-                            Text("Checking services…")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if let sys = viewModel.systemStatus {
-                        systemHealthRow("Database", ok: sys.database?.ok ?? false, detail: sys.database?.error)
-                        systemHealthRow("Qdrant", ok: sys.qdrant?.ok ?? false, detail: sys.qdrant?.error ?? (sys.qdrant?.collections.map { "\($0) collections" }))
-                        systemHealthRow("Gemini", ok: sys.gemini?.isUp ?? false, detail: sys.gemini?.error)
-                        systemHealthRow("OpenAI", ok: sys.openai?.ok ?? false, detail: sys.openai?.error)
-                        systemHealthRow("Plaud", ok: sys.plaud?.isUp ?? false, detail: sys.plaud?.error)
-                        systemHealthRow("Notion", ok: sys.notion?.isUp ?? false, detail: sys.notion?.error)
-                        Button("Re-check") { Task { await viewModel.loadSystemStatus() } }
-                            .font(.caption)
-                    } else {
-                        Button("Check System Health") { Task { await viewModel.loadSystemStatus() } }
+                    ServiceStatusBar(
+                        systemStatus: viewModel.systemStatus,
+                        isLoading: viewModel.isLoadingSystemStatus
+                    ) {
+                        await viewModel.loadSystemStatus()
                     }
                 }
 
@@ -162,6 +149,28 @@ struct SettingsView: View {
                 }
 
                 Section("Vector DB") {
+                    // Live status inline
+                    if let qdrant = viewModel.systemStatus?.qdrant {
+                        HStack(spacing: 6) {
+                            Image(systemName: qdrant.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(qdrant.ok ? .green : .red)
+                                .font(.caption)
+                            Text(qdrant.ok ? "Connected" : "Not connected")
+                                .font(.caption.weight(.medium))
+                            if let c = qdrant.collections {
+                                Text("· \(c) collection\(c == 1 ? "" : "s")")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if let error = qdrant.error {
+                                Text(error)
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
                     configField("Qdrant URL", text: $viewModel.qdrantURL, keyboard: .URL)
                     configField("Collection", text: $viewModel.qdrantCollectionName)
                 }
@@ -169,7 +178,28 @@ struct SettingsView: View {
                 Section("Credential Status") {
                     credentialRow("Gemini API Key", present: viewModel.hasGeminiAPIKey)
                     credentialRow("OpenAI API Key", present: viewModel.hasOpenAIAPIKey)
-                    credentialRow("Qdrant API Key", present: viewModel.hasQdrantAPIKey)
+
+                    // Qdrant API key is optional for local instances — show connection status too
+                    HStack {
+                        Image(systemName: qdrantEffectiveStatus ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(qdrantEffectiveStatus ? .green : .red)
+                        Text("Qdrant")
+                        Spacer()
+                        if viewModel.systemStatus?.qdrant?.ok == true {
+                            Text("Connected")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        } else if viewModel.hasQdrantAPIKey {
+                            Text("Key present · Not connected")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        } else {
+                            Text("No API key (ok for local)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
                     credentialRow("Notion Token", present: viewModel.hasNotionToken)
                     credentialRow("Notion OAuth", present: viewModel.hasNotionOAuth)
                 }
@@ -230,6 +260,12 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .task { await viewModel.loadAll() }
         }
+    }
+
+    /// Qdrant is "ok" if either the health check passed OR the API key is present
+    /// (local Qdrant doesn't need an API key, so missing key ≠ disconnected)
+    private var qdrantEffectiveStatus: Bool {
+        viewModel.systemStatus?.qdrant?.ok == true || viewModel.hasQdrantAPIKey
     }
 
     private func systemHealthRow(_ name: String, ok: Bool, detail: String?) -> some View {
