@@ -16,57 +16,22 @@ struct ContentView: View {
     @State private var selectedTab: AppTab = .timeline
     @State private var loadedTabs: Set<AppTab> = [.timeline]
     @State private var hasAutoFocusedRunningPipeline = false
-    @AppStorage("tabCustomization") private var tabCustomization: TabViewCustomization
 
     // Plain class (not @Observable) so SwiftUI doesn't track internal mutations —
     // safe to populate during body evaluation without "modifying state during view update".
     @State private var vmCache = ViewModelCache()
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            TabSection("Core") {
-                Tab("Timeline", systemImage: "calendar.day.timeline.leading", value: AppTab.timeline) {
-                    tabContent(for: .timeline)
+        ZStack {
+            ForEach(AppTab.allCases, id: \.self) { tab in
+                if loadedTabs.contains(tab) {
+                    tabContent(for: tab)
+                        .opacity(selectedTab == tab ? 1 : 0)
+                        .allowsHitTesting(selectedTab == tab)
+                        .accessibilityHidden(selectedTab != tab)
                 }
-                .customizationID("nav.timeline")
-
-                Tab("Search", systemImage: "magnifyingglass", value: AppTab.search) {
-                    tabContent(for: .search)
-                }
-                .customizationID("nav.search")
             }
-            .customizationID("section.core")
-
-            TabSection("Analysis") {
-                Tab("Stats", systemImage: "chart.bar.xaxis", value: AppTab.stats) {
-                    tabContent(for: .stats)
-                }
-                .customizationID("nav.stats")
-
-                Tab("Graph", systemImage: "point.3.connected.trianglepath.dotted", value: AppTab.graph) {
-                    tabContent(for: .graph)
-                }
-                .customizationID("nav.graph")
-            }
-            .customizationID("section.analysis")
-
-            TabSection("Manage") {
-                Tab("Data", systemImage: "arrow.triangle.2.circlepath", value: AppTab.data) {
-                    tabContent(for: .data)
-                }
-                .badge(dataTabBadge.map(Text.init))
-                .customizationID("nav.data")
-
-                Tab("Settings", systemImage: "gear", value: AppTab.settings) {
-                    tabContent(for: .settings)
-                }
-                .badge(settingsTabBadge.map(Text.init))
-                .customizationID("nav.settings")
-            }
-            .customizationID("section.manage")
         }
-        .tabViewStyle(.sidebarAdaptable)
-        .tabViewCustomization($tabCustomization)
         .onChange(of: selectedTab) { _, newValue in
             loadedTabs.insert(newValue)
         }
@@ -79,12 +44,14 @@ struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomStatusStack
+            bottomChrome
         }
         .animation(.easeInOut(duration: 0.3), value: api.isServerReachable)
         .animation(.easeInOut(duration: 0.3), value: sync.shouldShowGlobalBanner)
         .onAppear {
+            loadedTabs.insert(selectedTab)
             autoFocusRunningPipelineIfNeeded()
+            xray.isPipelineActive = sync.isRunning
         }
         .onChange(of: sync.isRunning) { _, newValue in
             autoFocusRunningPipelineIfNeeded()
@@ -94,23 +61,19 @@ struct ContentView: View {
 
     @ViewBuilder
     private func tabContent(for tab: AppTab) -> some View {
-        if loadedTabs.contains(tab) {
-            switch tab {
-            case .timeline:
-                TimelineView(viewModel: vmCache.timeline(api: api))
-            case .search:
-                SearchView(viewModel: vmCache.search(api: api))
-            case .stats:
-                StatsView(viewModel: vmCache.stats(api: api))
-            case .graph:
-                GraphContainerView(viewModel: vmCache.graph(api: api))
-            case .data:
-                DataView()
-            case .settings:
-                SettingsView(viewModel: vmCache.settings(api: api, auth: authManager))
-            }
-        } else {
-            Color.clear
+        switch tab {
+        case .timeline:
+            TimelineView(viewModel: vmCache.timeline(api: api))
+        case .search:
+            SearchView(viewModel: vmCache.search(api: api))
+        case .stats:
+            StatsView(viewModel: vmCache.stats(api: api))
+        case .graph:
+            GraphContainerView(viewModel: vmCache.graph(api: api))
+        case .data:
+            DataView()
+        case .settings:
+            SettingsView(viewModel: vmCache.settings(api: api, auth: authManager))
         }
     }
 
@@ -127,13 +90,85 @@ struct ContentView: View {
 
 
     @ViewBuilder
-    private var bottomStatusStack: some View {
-        if sync.shouldShowGlobalBanner && selectedTab != .data {
-            SyncActivityBanner(sync: sync) {
-                loadedTabs.insert(.data)
-                selectedTab = .data
+    private var bottomChrome: some View {
+        VStack(spacing: 6) {
+            if sync.shouldShowGlobalBanner && selectedTab != .data {
+                SyncActivityBanner(sync: sync) {
+                    loadedTabs.insert(.data)
+                    selectedTab = .data
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.horizontal, 8)
             }
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+
+            customTabBar
+        }
+    }
+
+    private var customTabBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            HStack(spacing: 4) {
+                ForEach(AppTab.allCases, id: \.self) { tab in
+                    tabButton(for: tab)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+        }
+        .background(.ultraThinMaterial)
+    }
+
+    private func tabButton(for tab: AppTab) -> some View {
+        let isSelected = selectedTab == tab
+
+        return Button {
+            loadedTabs.insert(tab)
+            withAnimation(.easeInOut(duration: 0.18)) {
+                selectedTab = tab
+            }
+        } label: {
+            VStack(spacing: 4) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: tab.icon)
+                        .font(.system(size: 18, weight: isSelected ? .semibold : .regular))
+
+                    if let badge = badgeText(for: tab) {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, badge.count > 1 ? 5 : 4)
+                            .padding(.vertical, 2)
+                            .background(.red)
+                            .clipShape(Capsule())
+                            .offset(x: 12, y: -8)
+                    }
+                }
+
+                Text(tab.title)
+                    .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func badgeText(for tab: AppTab) -> String? {
+        switch tab {
+        case .data:
+            return dataTabBadge
+        case .settings:
+            return settingsTabBadge
+        default:
+            return nil
         }
     }
 
@@ -164,13 +199,35 @@ struct ContentView: View {
 
 }
 
-private enum AppTab: String, Hashable {
+private enum AppTab: String, Hashable, CaseIterable {
     case timeline
     case search
     case stats
     case graph
     case data
     case settings
+
+    var title: String {
+        switch self {
+        case .timeline: return "Timeline"
+        case .search: return "Search"
+        case .stats: return "Stats"
+        case .graph: return "Graph"
+        case .data: return "Data"
+        case .settings: return "Settings"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .timeline: return "calendar.day.timeline.leading"
+        case .search: return "magnifyingglass"
+        case .stats: return "chart.bar.xaxis"
+        case .graph: return "point.3.connected.trianglepath.dotted"
+        case .data: return "arrow.triangle.2.circlepath"
+        case .settings: return "gear"
+        }
+    }
 }
 
 /// Plain class (NOT @Observable) that caches view models.
