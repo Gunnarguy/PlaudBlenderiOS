@@ -12,6 +12,8 @@ struct SyncDashboardView: View {
     @State private var batchDaysBack = 7
     @State private var batchLimit = 5
     @State private var batchTemplateId = ""
+    @State private var uploadModel = "gemini"
+    @State private var uploadTemplateId = ""
 
     var body: some View {
         NavigationStack {
@@ -30,6 +32,13 @@ struct SyncDashboardView: View {
 
                     // 4. Stats — recordings + workflows unified
                     statsCard
+
+                    adminCard
+
+                    if let failures = viewModel.syncFailures,
+                       failures.actionableCount > 0 || failures.archivedCount > 0 {
+                        failuresCard(failures)
+                    }
 
                     // 5. Upload candidates
                     if !viewModel.uploadCandidates.isEmpty {
@@ -642,6 +651,122 @@ struct SyncDashboardView: View {
         .padding(.horizontal)
     }
 
+    private var adminCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Admin Controls", systemImage: "wrench.and.screwdriver")
+                .font(.subheadline.weight(.semibold))
+
+            HStack(spacing: 8) {
+                adminButton("Stack Status") {
+                    Task { await viewModel.runStackAction("status") }
+                }
+                adminButton("Ensure Public") {
+                    Task { await viewModel.runStackAction("ensure-public") }
+                }
+                adminButton("Restart Public") {
+                    Task { await viewModel.runStackAction("restart-public") }
+                }
+            }
+
+            HStack(spacing: 8) {
+                adminButton(viewModel.isCreatingBackup ? "Creating…" : "Create Backup") {
+                    Task { await viewModel.createBackup() }
+                }
+                .disabled(viewModel.isCreatingBackup)
+
+                if let latestBackup = viewModel.backups.first {
+                    adminButton("Download Latest") {
+                        Task { await viewModel.downloadBackup(latestBackup) }
+                    }
+                }
+            }
+
+            if let backupURL = viewModel.downloadedBackupURL {
+                ShareLink(item: backupURL) {
+                    Label("Share Downloaded Backup", systemImage: "square.and.arrow.up")
+                        .font(.caption.weight(.semibold))
+                }
+            }
+
+            if let latestBackup = viewModel.backups.first {
+                Text("Latest backup: \(latestBackup.filename) · \(ByteCountFormatter.string(fromByteCount: Int64(latestBackup.sizeBytes), countStyle: .file))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let stackControl = viewModel.stackControl {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(stackControl.action)
+                            .font(.caption.weight(.semibold))
+                        Spacer()
+                        Text(stackControl.status.capitalized)
+                            .font(.caption2)
+                            .foregroundStyle(stackControl.status == "ok" ? .green : .secondary)
+                    }
+
+                    if let publicURL = stackControl.publicURL, !publicURL.isEmpty {
+                        Text(publicURL)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Text(stackControl.output)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(8)
+                }
+                .padding(10)
+                .background(.thinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding()
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    private func failuresCard(_ failures: SyncFailureSummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Sync Failures", systemImage: "exclamationmark.triangle")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("Retry Actionable") { Task { await viewModel.resetStuck() } }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+
+            HStack(spacing: 12) {
+                miniStat("\(failures.actionableCount)", "actionable", .orange)
+                miniStat("\(failures.archivedCount)", "archived", .secondary)
+            }
+
+            ForEach(failures.actionable.prefix(4)) { item in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title ?? item.recordingId ?? "Recording")
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(item.reason ?? item.error)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(.thinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding()
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
     private func miniStat(_ value: String, _ label: String, _ color: Color = .primary) -> some View {
         VStack(spacing: 2) {
             Text(value)
@@ -661,12 +786,38 @@ struct SyncDashboardView: View {
 
     private var uploadCandidatesCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Upload Candidates", systemImage: "icloud.and.arrow.up")
-                .font(.subheadline.weight(.semibold))
+            HStack {
+                Label("Upload Candidates", systemImage: "icloud.and.arrow.up")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button(viewModel.isUploadingCandidates ? "Uploading…" : "Upload & Process All") {
+                    Task {
+                        await viewModel.uploadAllCandidates(
+                            templateId: uploadTemplateId.isEmpty ? nil : uploadTemplateId,
+                            model: uploadModel
+                        )
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(viewModel.isUploadingCandidates)
+            }
 
             Text("\(viewModel.uploadCandidates.count) recording\(viewModel.uploadCandidates.count == 1 ? "" : "s") eligible for Plaud cloud upload")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                TextField("Template ID (optional)", text: $uploadTemplateId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Model", text: $uploadModel)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .frame(width: 90)
+            }
+            .font(.caption)
 
             ForEach(viewModel.uploadCandidates.prefix(10)) { candidate in
                 HStack(spacing: 8) {
@@ -759,6 +910,17 @@ struct SyncDashboardView: View {
         case "graph": return .indigo
         default: return .white.opacity(0.5)
         }
+    }
+
+    private func adminButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(viewModel.isRunningStackAction)
     }
 
     private func phaseIcon(for status: String) -> String {

@@ -123,6 +123,36 @@ final class APIClient: Sendable {
         return try await execute(request)
     }
 
+    func downloadFile(_ path: String) async throws -> URL {
+        let request = try buildRequest(path: versionedPath(path), method: "GET")
+        let (data, response) = try await session.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse
+        }
+
+        guard 200..<300 ~= http.statusCode else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw APIError.httpError(status: http.statusCode, body: body)
+        }
+
+        let suggestedName: String = {
+            if let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
+               let range = disposition.range(of: "filename=") {
+                return disposition[range.upperBound...]
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+            }
+            return request.url?.lastPathComponent ?? "download.bin"
+        }()
+
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try? FileManager.default.removeItem(at: destination)
+        }
+        try data.write(to: destination, options: .atomic)
+        return destination
+    }
+
     // MARK: - Health Check (no auth required)
 
     func healthCheck() async -> Bool {

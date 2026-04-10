@@ -8,8 +8,15 @@ final class SyncViewModel {
     var dbStats: RecordingDbStats?
     var workflowStats: WorkflowStats?
     var uploadCandidates: [UploadCandidate] = []
+    var syncFailures: SyncFailureSummary?
+    var stackControl: StackControlResponse?
+    var backups: [AdminBackupInfo] = []
+    var downloadedBackupURL: URL?
     var isLoading = false
     var isRunning = false
+    var isRunningStackAction = false
+    var isUploadingCandidates = false
+    var isCreatingBackup = false
     var error: String?
     var lastMessage: String?
     var lastUpdated: Date?
@@ -219,10 +226,81 @@ final class SyncViewModel {
         }
     }
 
+    func loadSyncFailures() async {
+        do {
+            syncFailures = try await api.get("/api/sync/failures")
+        } catch {
+            syncFailures = nil
+        }
+    }
+
+    func loadBackups() async {
+        do {
+            backups = try await api.get("/api/admin/backups")
+        } catch {
+            backups = []
+        }
+    }
+
     func refreshCache() async {
         do {
             let response: SuccessResponse = try await api.post("/api/sync/refresh-cache")
             lastMessage = response.message
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func uploadAllCandidates(templateId: String? = nil, model: String = "gemini") async {
+        isUploadingCandidates = true
+        defer { isUploadingCandidates = false }
+
+        do {
+            let body = UploadProcessRequest(filePaths: nil, templateId: templateId, model: model)
+            let response: UploadProcessResult = try await api.post("/api/sync/upload/process", body: body)
+            lastMessage = "Uploaded \(response.uploadedCount) file(s), \(response.errorCount) error(s)"
+            await loadUploadCandidates()
+            await loadWorkflowStats()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func runStackAction(_ action: String) async {
+        isRunningStackAction = true
+        defer { isRunningStackAction = false }
+
+        do {
+            let response: StackControlResponse = try await api.post("/api/admin/stack/\(action)")
+            stackControl = response
+            lastMessage = response.message
+            if action != "restart-public" {
+                await loadBackups()
+                await loadUploadCandidates()
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func createBackup() async {
+        isCreatingBackup = true
+        defer { isCreatingBackup = false }
+
+        do {
+            let backup: AdminBackupInfo = try await api.post("/api/admin/backups")
+            backups.removeAll { $0.filename == backup.filename }
+            backups.insert(backup, at: 0)
+            lastMessage = backup.message.isEmpty ? "Backup created" : backup.message
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func downloadBackup(_ backup: AdminBackupInfo) async {
+        do {
+            downloadedBackupURL = try await api.downloadFile(backup.downloadPath)
+            lastMessage = "Downloaded \(backup.filename)"
         } catch {
             self.error = error.localizedDescription
         }
@@ -235,6 +313,8 @@ final class SyncViewModel {
         await loadDbStats()
         await loadWorkflowStats()
         await loadUploadCandidates()
+        await loadSyncFailures()
+        await loadBackups()
         isLoading = false
     }
 
