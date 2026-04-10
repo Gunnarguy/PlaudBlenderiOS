@@ -13,6 +13,9 @@ final class SyncViewModel {
     var stackControl: StackControlResponse?
     var backups: [AdminBackupInfo] = []
     var downloadedBackupURL: URL?
+    var supportsSyncFailuresEndpoint = true
+    var supportsAdminEndpoints = true
+    var supportsUploadProcessEndpoint = true
     var isLoadingSystemStatus = false
     var isLoading = false
     var isRunning = false
@@ -251,17 +254,31 @@ final class SyncViewModel {
     }
 
     func loadSyncFailures() async {
+        guard supportsSyncFailuresEndpoint else {
+            syncFailures = nil
+            return
+        }
         do {
             syncFailures = try await api.get("/api/sync/failures")
         } catch {
+            if isNotFound(error) {
+                supportsSyncFailuresEndpoint = false
+            }
             syncFailures = nil
         }
     }
 
     func loadBackups() async {
+        guard supportsAdminEndpoints else {
+            backups = []
+            return
+        }
         do {
             backups = try await api.get("/api/admin/backups")
         } catch {
+            if isNotFound(error) {
+                supportsAdminEndpoints = false
+            }
             backups = []
         }
     }
@@ -286,6 +303,11 @@ final class SyncViewModel {
     }
 
     func uploadAllCandidates(templateId: String? = nil, model: String = "gemini") async {
+        guard supportsUploadProcessEndpoint else {
+            lastMessage = "Upload and process requires the newer backend API"
+            return
+        }
+
         isUploadingCandidates = true
         defer { isUploadingCandidates = false }
 
@@ -296,11 +318,21 @@ final class SyncViewModel {
             await loadUploadCandidates()
             await loadWorkflowStats()
         } catch {
+            if isNotFound(error) {
+                supportsUploadProcessEndpoint = false
+                lastMessage = "Upload and process requires the newer backend API"
+                return
+            }
             self.error = error.localizedDescription
         }
     }
 
     func runStackAction(_ action: String) async {
+        guard supportsAdminEndpoints else {
+            lastMessage = "Admin controls require the newer backend API"
+            return
+        }
+
         isRunningStackAction = true
         defer { isRunningStackAction = false }
 
@@ -313,11 +345,21 @@ final class SyncViewModel {
                 await loadUploadCandidates()
             }
         } catch {
+            if isNotFound(error) {
+                supportsAdminEndpoints = false
+                lastMessage = "Admin controls require the newer backend API"
+                return
+            }
             self.error = error.localizedDescription
         }
     }
 
     func createBackup() async {
+        guard supportsAdminEndpoints else {
+            lastMessage = "Backups require the newer backend API"
+            return
+        }
+
         isCreatingBackup = true
         defer { isCreatingBackup = false }
 
@@ -327,15 +369,30 @@ final class SyncViewModel {
             backups.insert(backup, at: 0)
             lastMessage = backup.message.isEmpty ? "Backup created" : backup.message
         } catch {
+            if isNotFound(error) {
+                supportsAdminEndpoints = false
+                lastMessage = "Backups require the newer backend API"
+                return
+            }
             self.error = error.localizedDescription
         }
     }
 
     func downloadBackup(_ backup: AdminBackupInfo) async {
+        guard supportsAdminEndpoints else {
+            lastMessage = "Backups require the newer backend API"
+            return
+        }
+
         do {
             downloadedBackupURL = try await api.downloadFile(backup.downloadPath)
             lastMessage = "Downloaded \(backup.filename)"
         } catch {
+            if isNotFound(error) {
+                supportsAdminEndpoints = false
+                lastMessage = "Backups require the newer backend API"
+                return
+            }
             self.error = error.localizedDescription
         }
     }
@@ -378,6 +435,13 @@ final class SyncViewModel {
         } else {
             stopMonitoring()
         }
+    }
+
+    private func isNotFound(_ error: Error) -> Bool {
+        guard case APIError.httpError(let status, _) = error else {
+            return false
+        }
+        return status == 404
     }
 
     private func startMonitoring() {

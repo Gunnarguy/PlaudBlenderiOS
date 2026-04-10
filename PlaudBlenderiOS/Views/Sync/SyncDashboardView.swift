@@ -49,9 +49,16 @@ struct SyncDashboardView: View {
                     // 4. Stats — recordings + workflows unified
                     statsCard
 
-                    adminCard
+                    if viewModel.supportsAdminEndpoints {
+                        adminCard
+                    }
 
-                    if let failures = viewModel.syncFailures,
+                    if !viewModel.supportsAdminEndpoints || !viewModel.supportsSyncFailuresEndpoint || !viewModel.supportsUploadProcessEndpoint {
+                        compatibilityCard
+                    }
+
+                    if viewModel.supportsSyncFailuresEndpoint,
+                       let failures = viewModel.syncFailures,
                        failures.actionableCount > 0 || failures.archivedCount > 0 {
                         failuresCard(failures)
                     }
@@ -843,7 +850,7 @@ struct SyncDashboardView: View {
                 .font(.caption.weight(.semibold))
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(viewModel.isUploadingCandidates)
+                .disabled(viewModel.isUploadingCandidates || !viewModel.supportsUploadProcessEndpoint)
             }
 
             Text("\(viewModel.uploadCandidates.count) recording\(viewModel.uploadCandidates.count == 1 ? "" : "s") eligible for Plaud cloud upload")
@@ -883,6 +890,12 @@ struct SyncDashboardView: View {
 
             if viewModel.uploadCandidates.count > 10 {
                 Text("+ \(viewModel.uploadCandidates.count - 10) more")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !viewModel.supportsUploadProcessEndpoint {
+                Text("Upload and process needs the newer backend API. Upload candidates still work on this server build.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -961,6 +974,39 @@ struct SyncDashboardView: View {
         }
         .padding()
         .background(.orange.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    private var compatibilityCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(.orange)
+                Text("Backend Is Older Than The App")
+                    .font(.subheadline.weight(.semibold))
+            }
+
+            if !viewModel.supportsAdminEndpoints {
+                Text("Admin controls and backups are hidden because this server build does not expose `/api/v1/admin/...` yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !viewModel.supportsSyncFailuresEndpoint {
+                Text("Sync failure summaries are hidden because `/api/v1/sync/failures` is not available on this backend.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !viewModel.supportsUploadProcessEndpoint {
+                Text("One-tap upload and process is disabled because `/api/v1/sync/upload/process` is not available on this backend.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(.orange.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal)
     }

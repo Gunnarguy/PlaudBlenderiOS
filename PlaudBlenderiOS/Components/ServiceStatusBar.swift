@@ -86,7 +86,7 @@ struct ServiceStatusBar: View {
             serviceRow("Plaud", icon: "mic.fill", ok: sys.plaud?.isUp == true,
                        detail: sys.plaud?.error ?? (sys.plaud?.isUp == true ? "Authenticated" : "Not connected"))
             serviceRow("Notion", icon: "doc.text", ok: sys.notion?.isUp == true,
-                       detail: sys.notion?.error ?? (sys.notion?.isUp == true ? "Connected" : "Not connected"))
+                       detail: notionDetail(sys.notion))
 
             if let onRefresh {
                 Button {
@@ -162,5 +162,25 @@ struct ServiceStatusBar: View {
         if sys.plaud?.isUp == true { count += 1 }
         if sys.notion?.isUp == true { count += 1 }
         return count
+    }
+
+    private func notionDetail(_ notion: SystemStatus.ServiceFlag?) -> String? {
+        guard let notion else { return nil }
+        if let error = notion.error, !error.isEmpty {
+            return error
+        }
+        if let workspaceName = notion.workspaceName, !workspaceName.isEmpty {
+            return workspaceName
+        }
+        if notion.isAuthenticated == true {
+            return "Connected"
+        }
+        if notion.hasCredentials == true {
+            return "Integration token configured"
+        }
+        if notion.hasAccessToken == true {
+            return "OAuth token present"
+        }
+        return notion.isUp ? "Configured" : "Not connected"
     }
 }

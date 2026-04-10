@@ -27,14 +27,24 @@ struct SystemStatus: Decodable, Sendable {
         let configured: Bool?
         let ok: Bool?
         let isAuthenticated: Bool?
+        let hasCredentials: Bool?
+        let hasAccessToken: Bool?
+        let workspaceName: String?
         let error: String?
 
         var isUp: Bool {
-            ok ?? configured ?? isAuthenticated ?? false
+            ok == true
+                || isAuthenticated == true
+                || hasCredentials == true
+                || hasAccessToken == true
+                || configured == true
         }
 
         enum CodingKeys: String, CodingKey {
             case configured, ok, error
+            case hasCredentials = "has_credentials"
+            case hasAccessToken = "has_access_token"
+            case workspaceName = "workspace_name"
             case isAuthenticated = "is_authenticated"
         }
     }
