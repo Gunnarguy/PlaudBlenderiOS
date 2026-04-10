@@ -40,7 +40,7 @@ final class NotionViewModel: NSObject {
     }
 
     var isAuthenticated: Bool {
-        authStatus?.isAuthenticated == true
+        authStatus?.isAuthenticated == true || status?.isConnected == true
     }
 
     var workspaceName: String? {
