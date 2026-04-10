@@ -1,23 +1,20 @@
 import Foundation
 
 /// A recording eligible for Plaud cloud upload.
+/// Matches backend response: path, name, filename, size_mb, format, in_cloud
 struct UploadCandidate: Codable, Identifiable, Sendable {
-    let recordingId: String
-    let title: String?
-    let durationSeconds: Double?
-    let status: String?
+    let path: String
+    let name: String
+    let filename: String
+    let sizeMb: Double
+    let format: String
+    let inCloud: Bool
 
-    var id: String { recordingId }
+    var id: String { path }
 
     enum CodingKeys: String, CodingKey {
-        case recordingId = "recording_id"
-        case title
-        case durationSeconds = "duration_seconds"
-        case status
+        case path, name, filename, format
+        case sizeMb = "size_mb"
+        case inCloud = "in_cloud"
     }
-}
-
-/// Response wrapper for upload candidates.
-struct UploadCandidatesResponse: Codable, Sendable {
-    let recordings: [UploadCandidate]
 }

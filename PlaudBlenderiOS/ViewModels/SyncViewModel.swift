@@ -212,8 +212,8 @@ final class SyncViewModel {
 
     func loadUploadCandidates() async {
         do {
-            let response: UploadCandidatesResponse = try await api.get("/api/sync/upload-candidates")
-            uploadCandidates = response.recordings
+            let candidates: [UploadCandidate] = try await api.get("/api/sync/upload-candidates")
+            uploadCandidates = candidates
         } catch {
             uploadCandidates = []
         }

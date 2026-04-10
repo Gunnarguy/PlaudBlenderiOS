@@ -674,25 +674,17 @@ struct SyncDashboardView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(candidate.title ?? candidate.recordingId)
+                        Text(candidate.filename)
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
-                        if let dur = candidate.durationSeconds {
-                            Text(TimeInterval(dur).durationFormatted)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    if let status = candidate.status {
-                        Text(status)
+                        Text(String(format: "%.1f MB · %@", candidate.sizeMb, candidate.format.uppercased()))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.secondary.opacity(0.12))
-                            .clipShape(Capsule())
                     }
+                    Spacer()
+                    Image(systemName: candidate.inCloud ? "checkmark.icloud" : "icloud.slash")
+                        .font(.caption2)
+                        .foregroundStyle(candidate.inCloud ? .green : .orange)
                 }
             }
 
