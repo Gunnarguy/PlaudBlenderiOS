@@ -14,7 +14,11 @@ final class AuthManager: Sendable {
 
     /// Pi's known LAN IP for fast local access on home Wi-Fi.
     private static let piLanURL = "http://10.0.0.170:8000"
-    /// ngrok tunnel — works from anywhere (cell, work, etc.)
+    /// Temporary direct-Mac recovery URL from local debugging.
+    private static let temporaryMacRecoveryURL = "http://10.0.0.175:8000"
+    /// Temporary ngrok recovery URL from local debugging.
+    private static let temporaryNgrokRecoveryURL = "https://3796-12-216-111-84.ngrok-free.app"
+    /// Reserved ngrok tunnel — canonical public backend URL.
     private static let ngrokURL = "https://glairy-ona-irreplaceable.ngrok-free.dev"
 
     /// Default server URL — uses Info.plist value (ngrok), then falls back.
@@ -117,6 +121,10 @@ final class AuthManager: Sendable {
 
         if !rawValue.contains("://") {
             rawValue = "http://\(rawValue)"
+        }
+
+        if rawValue == temporaryMacRecoveryURL || rawValue == temporaryNgrokRecoveryURL {
+            rawValue = ngrokURL
         }
 
         guard let components = URLComponents(string: rawValue),
