@@ -7,12 +7,14 @@ final class SyncViewModel {
     var pipelineStatus: PipelineStatus?
     var dbStats: RecordingDbStats?
     var workflowStats: WorkflowStats?
+    var uploadCandidates: [UploadCandidate] = []
     var isLoading = false
     var isRunning = false
     var error: String?
     var lastMessage: String?
     var lastUpdated: Date?
     var hasBootstrapped = false
+    var showBatchWorkflowSheet = false
 
     private let api: APIClient
     @ObservationIgnored private var monitorTask: Task<Void, Never>?
@@ -208,12 +210,31 @@ final class SyncViewModel {
         }
     }
 
+    func loadUploadCandidates() async {
+        do {
+            let response: UploadCandidatesResponse = try await api.get("/api/sync/upload-candidates")
+            uploadCandidates = response.recordings
+        } catch {
+            uploadCandidates = []
+        }
+    }
+
+    func refreshCache() async {
+        do {
+            let response: SuccessResponse = try await api.post("/api/sync/refresh-cache")
+            lastMessage = response.message
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func loadAll() async {
         isLoading = true
         error = nil
         await loadStatus(showLoading: false)
         await loadDbStats()
         await loadWorkflowStats()
+        await loadUploadCandidates()
         isLoading = false
     }
 

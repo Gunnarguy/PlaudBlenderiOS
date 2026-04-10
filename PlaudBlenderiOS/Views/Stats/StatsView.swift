@@ -95,6 +95,11 @@ struct StatsView: View {
                     costHistoryChart(byDay, totalCost: history.totalCostUsd, totalCalls: history.totalCalls, days: history.days)
                 }
 
+                // Model pricing table
+                if let pricing = viewModel.modelPricing {
+                    modelPricingSection(pricing)
+                }
+
                 // Topics link
                 NavigationLink {
                     TopicsGridView(viewModel: TopicsViewModel(api: viewModel.api))
@@ -671,6 +676,79 @@ struct StatsView: View {
                     Label("Peak: \(maxEntry.date) ($\(String(format: "%.4f", maxEntry.cost)))", systemImage: "arrow.up")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding()
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    // MARK: - Model Pricing Table
+
+    @State private var showPricing = false
+
+    private func modelPricingSection(_ pricing: ModelPricing) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showPricing.toggle() }
+            } label: {
+                HStack {
+                    Label("Model Pricing", systemImage: "tag.circle")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: showPricing ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if showPricing {
+                ForEach(pricing.models.indices, id: \.self) { i in
+                    let model = pricing.models[i]
+                    let name = model["model"]?.stringValue ?? model["name"]?.stringValue ?? "Unknown"
+                    let inputCost = model["input_cost_per_1k"]?.doubleValue ?? model["input_cost"]?.doubleValue
+                    let outputCost = model["output_cost_per_1k"]?.doubleValue ?? model["output_cost"]?.doubleValue
+                    let provider = model["provider"]?.stringValue
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(name)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                            Spacer()
+                            if let provider {
+                                Text(provider)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.secondary.opacity(0.1))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        HStack(spacing: 16) {
+                            if let ic = inputCost {
+                                Text("In: $\(String(format: "%.4f", ic))/1K")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                            if let oc = outputCost {
+                                Text("Out: $\(String(format: "%.4f", oc))/1K")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    if i < pricing.models.count - 1 {
+                        Divider()
+                    }
                 }
             }
         }

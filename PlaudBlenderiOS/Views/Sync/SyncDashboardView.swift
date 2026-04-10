@@ -7,6 +7,11 @@ struct SyncDashboardView: View {
     @State private var consoleAutoScroll = true
     @State private var consoleEventLimit = 30
     @State private var showPhaseDetail = false
+    @State private var selectedStage: PipelineStage = .full
+    @State private var showBatchWorkflowSheet = false
+    @State private var batchDaysBack = 7
+    @State private var batchLimit = 5
+    @State private var batchTemplateId = ""
 
     var body: some View {
         NavigationStack {
@@ -25,6 +30,11 @@ struct SyncDashboardView: View {
 
                     // 4. Stats — recordings + workflows unified
                     statsCard
+
+                    // 5. Upload candidates
+                    if !viewModel.uploadCandidates.isEmpty {
+                        uploadCandidatesCard
+                    }
                 }
                 .padding(.vertical, 8)
             }
@@ -32,6 +42,9 @@ struct SyncDashboardView: View {
             .refreshable { await viewModel.refresh() }
             .task { await viewModel.bootstrapIfNeeded() }
             .task { await xray.bootstrapIfNeeded() }
+            .sheet(isPresented: $showBatchWorkflowSheet) {
+                batchWorkflowSheet
+            }
         }
     }
 
@@ -158,11 +171,11 @@ struct SyncDashboardView: View {
             // Action buttons
             HStack(spacing: 10) {
                 Button {
-                    Task { await viewModel.runPipeline() }
+                    Task { await viewModel.runPipeline(stage: selectedStage.rawValue) }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: viewModel.isRunning ? "hourglass" : "arrow.triangle.2.circlepath")
-                        Text(viewModel.isRunning ? "Syncing…" : "Full Sync")
+                        Image(systemName: viewModel.isRunning ? "hourglass" : selectedStage.icon)
+                        Text(viewModel.isRunning ? "Syncing…" : selectedStage.displayName)
                     }
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
@@ -171,12 +184,42 @@ struct SyncDashboardView: View {
                 .controlSize(.regular)
                 .disabled(viewModel.isRunning)
 
+                // Stage picker
+                Menu {
+                    ForEach(PipelineStage.allCases) { stage in
+                        Button {
+                            selectedStage = stage
+                        } label: {
+                            Label {
+                                VStack(alignment: .leading) {
+                                    Text(stage.displayName)
+                                    Text(stage.description)
+                                        .font(.caption2)
+                                }
+                            } icon: {
+                                Image(systemName: stage.icon)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down.circle")
+                        .font(.title3)
+                }
+                .buttonStyle(.bordered)
+
                 Menu {
                     Button { Task { await viewModel.resetStuck() } } label: {
                         Label("Reset Stuck", systemImage: "arrow.counterclockwise")
                     }
                     Button { Task { await viewModel.refreshWorkflows() } } label: {
                         Label("Refresh Workflows", systemImage: "arrow.clockwise")
+                    }
+                    Button { Task { await viewModel.refreshCache() } } label: {
+                        Label("Refresh Cache", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    Divider()
+                    Button { showBatchWorkflowSheet = true } label: {
+                        Label("Batch Workflows", systemImage: "brain")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -612,6 +655,102 @@ struct SyncDashboardView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 6)
+    }
+
+    // MARK: - 5. Upload Candidates
+
+    private var uploadCandidatesCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Upload Candidates", systemImage: "icloud.and.arrow.up")
+                .font(.subheadline.weight(.semibold))
+
+            Text("\(viewModel.uploadCandidates.count) recording\(viewModel.uploadCandidates.count == 1 ? "" : "s") eligible for Plaud cloud upload")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(viewModel.uploadCandidates.prefix(10)) { candidate in
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(candidate.title ?? candidate.recordingId)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                        if let dur = candidate.durationSeconds {
+                            Text(TimeInterval(dur).durationFormatted)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if let status = candidate.status {
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.secondary.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+
+            if viewModel.uploadCandidates.count > 10 {
+                Text("+ \(viewModel.uploadCandidates.count - 10) more")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    // MARK: - Batch Workflow Sheet
+
+    private var batchWorkflowSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Parameters") {
+                    Stepper("Days Back: \(batchDaysBack)", value: $batchDaysBack, in: 1...90)
+                    Stepper("Limit: \(batchLimit)", value: $batchLimit, in: 1...50)
+                    TextField("Template ID (optional)", text: $batchTemplateId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+
+                Section {
+                    Button {
+                        Task {
+                            await viewModel.submitWorkflows(
+                                daysBack: batchDaysBack,
+                                limit: batchLimit,
+                                templateId: batchTemplateId.isEmpty ? nil : batchTemplateId
+                            )
+                            showBatchWorkflowSheet = false
+                        }
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Label("Submit Batch", systemImage: "brain")
+                                .font(.headline)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .navigationTitle("Batch Workflows")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showBatchWorkflowSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     // MARK: - Shared Helpers

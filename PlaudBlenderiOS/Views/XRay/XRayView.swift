@@ -62,11 +62,18 @@ struct XRayView: View {
             .navigationTitle("X-ray Monitor")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        exportData = buildExportPayload()
-                        isShowingExport = true
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
+                    HStack(spacing: 12) {
+                        Button {
+                            Task { await viewModel.clearEvents() }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        Button {
+                            exportData = buildExportPayload()
+                            isShowingExport = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
                     }
                 }
             }

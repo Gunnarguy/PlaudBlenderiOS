@@ -2,6 +2,51 @@ import Foundation
 
 // MARK: - Pipeline
 
+/// Available pipeline stages for `POST /api/sync/run`.
+enum PipelineStage: String, CaseIterable, Identifiable, Sendable {
+    case full
+    case ingest
+    case process
+    case index
+    case graph
+    case reindex
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .full: "Full Sync"
+        case .ingest: "Ingest"
+        case .process: "Process"
+        case .index: "Index"
+        case .graph: "Graph"
+        case .reindex: "Reindex"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .full: "arrow.triangle.2.circlepath"
+        case .ingest: "arrow.down.doc"
+        case .process: "gearshape.2"
+        case .index: "magnifyingglass"
+        case .graph: "point.3.connected.trianglepath.dotted"
+        case .reindex: "arrow.clockwise"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .full: "Run the entire pipeline end-to-end"
+        case .ingest: "Fetch new recordings from Plaud"
+        case .process: "Run AI models on pending recordings"
+        case .index: "Rebuild the Qdrant vector index"
+        case .graph: "Rebuild the knowledge graph"
+        case .reindex: "Reindex all embeddings in Qdrant"
+        }
+    }
+}
+
 /// Pipeline run request body.
 struct PipelineRunRequest: Codable, Sendable {
     var stage: String = "full"

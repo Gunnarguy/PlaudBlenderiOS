@@ -78,6 +78,29 @@ struct SettingsView: View {
                     }
                 }
 
+                // System health — deep connectivity check
+                Section("System Health") {
+                    if viewModel.isLoadingSystemStatus {
+                        HStack {
+                            ProgressView()
+                            Text("Checking services…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let sys = viewModel.systemStatus {
+                        systemHealthRow("Database", ok: sys.database?.ok ?? false, detail: sys.database?.error)
+                        systemHealthRow("Qdrant", ok: sys.qdrant?.ok ?? false, detail: sys.qdrant?.error ?? (sys.qdrant?.collections.map { "\($0) collections" }))
+                        systemHealthRow("Gemini", ok: sys.gemini?.isUp ?? false, detail: sys.gemini?.error)
+                        systemHealthRow("OpenAI", ok: sys.openai?.ok ?? false, detail: sys.openai?.error)
+                        systemHealthRow("Plaud", ok: sys.plaud?.isUp ?? false, detail: sys.plaud?.error)
+                        systemHealthRow("Notion", ok: sys.notion?.isUp ?? false, detail: sys.notion?.error)
+                        Button("Re-check") { Task { await viewModel.loadSystemStatus() } }
+                            .font(.caption)
+                    } else {
+                        Button("Check System Health") { Task { await viewModel.loadSystemStatus() } }
+                    }
+                }
+
                 // About
                 Section("About") {
                     HStack {
@@ -110,6 +133,26 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .task { await viewModel.loadAll() }
+        }
+    }
+
+    private func systemHealthRow(_ name: String, ok: Bool, detail: String?) -> some View {
+        HStack {
+            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(ok ? .green : .red)
+            Text(name)
+                .font(.subheadline)
+            Spacer()
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text(ok ? "OK" : "Down")
+                    .font(.caption)
+                    .foregroundStyle(ok ? .green : .red)
+            }
         }
     }
 }

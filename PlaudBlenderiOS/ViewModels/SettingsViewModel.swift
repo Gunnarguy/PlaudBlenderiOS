@@ -7,8 +7,10 @@ final class SettingsViewModel {
     var apiToken: String = ""
     var plaudStatus: TokenStatus?
     var notionAuthStatus: TokenStatus?
+    var systemStatus: SystemStatus?
     var isServerReachable = false
     var isCheckingServer = false
+    var isLoadingSystemStatus = false
     var error: String?
 
     private let api: APIClient
@@ -64,9 +66,20 @@ final class SettingsViewModel {
         }
     }
 
+    func loadSystemStatus() async {
+        isLoadingSystemStatus = true
+        do {
+            systemStatus = try await api.get("/api/status")
+        } catch {
+            systemStatus = nil
+        }
+        isLoadingSystemStatus = false
+    }
+
     func loadAll() async {
         await checkServer()
         await loadPlaudStatus()
         await loadNotionStatus()
+        await loadSystemStatus()
     }
 }

@@ -190,6 +190,11 @@ struct NotionView: View {
                 notionSnapshotSection(status)
                     .padding(.horizontal)
 
+                // Coverage calendar
+                if let coverage = viewModel.coverage, let calendar = coverage.calendar, !calendar.isEmpty {
+                    coverageCalendarSection(coverage)
+                }
+
                 // Import section
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Import", systemImage: "square.and.arrow.down")
@@ -327,6 +332,71 @@ struct NotionView: View {
                 }
             }
             .padding(.vertical)
+        }
+    }
+
+    private func coverageCalendarSection(_ coverage: NotionCoverageResponse) -> some View {
+        let days = coverage.calendar ?? []
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Label("Coverage Calendar", systemImage: "calendar")
+                .font(.headline)
+
+            HStack(spacing: 16) {
+                if let cn = coverage.totalChronos {
+                    VStack {
+                        Text("\(cn)").font(.title3.bold()).monospacedDigit()
+                        Text("Chronos").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                if let nn = coverage.totalNotion {
+                    VStack {
+                        Text("\(nn)").font(.title3.bold()).monospacedDigit()
+                        Text("Notion").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Legend
+            HStack(spacing: 12) {
+                legendDot(.green, "Both")
+                legendDot(.blue, "Chronos only")
+                legendDot(.orange, "Notion only")
+                legendDot(.secondary.opacity(0.2), "Neither")
+            }
+            .font(.caption2)
+
+            // Calendar grid (last 30 days, 7 cols)
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(days.suffix(35), id: \.date) { day in
+                    let color: Color = {
+                        if day.hasChronos && day.hasNotion { return .green }
+                        if day.hasChronos { return .blue }
+                        if day.hasNotion { return .orange }
+                        return .secondary.opacity(0.15)
+                    }()
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color)
+                        .frame(height: 16)
+                        .overlay {
+                            Text(String(day.date.suffix(2)))
+                                .font(.system(size: 7))
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                }
+            }
+        }
+        .padding()
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    private func legendDot(_ color: Color, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(label)
         }
     }
 

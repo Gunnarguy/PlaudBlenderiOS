@@ -149,6 +149,17 @@ final class XRayViewModel {
         await loadThroughput()
     }
 
+    func clearEvents() async {
+        do {
+            let _: SuccessResponse = try await api.post("/api/xray/clear")
+            events = []
+            latestSeq = 0
+            throughputBuckets = []
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func loadThroughput() async {
         do {
             let response: XRayThroughput = try await api.get("/api/xray/throughput", query: ["buckets": "24"])

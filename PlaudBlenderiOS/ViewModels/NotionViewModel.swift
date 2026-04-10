@@ -10,6 +10,7 @@ final class NotionViewModel: NSObject {
     var databases: [NotionDatabase] = []
     var recordings: [NotionRecording] = []
     var importProgress: NotionImportProgress?
+    var coverage: NotionCoverageResponse?
     var isLoading = false
     var isLoadingMore = false
     var isAuthorizing = false
@@ -167,6 +168,14 @@ final class NotionViewModel: NSObject {
         }
     }
 
+    func loadCoverage() async {
+        do {
+            coverage = try await api.get("/api/notion/coverage")
+        } catch {
+            coverage = nil
+        }
+    }
+
     func loadAll() async {
         isLoading = true
         error = nil
@@ -178,6 +187,7 @@ final class NotionViewModel: NSObject {
         if hasSelectedDatabase {
             await loadRecordings()
             await loadImportProgress()
+            await loadCoverage()
         }
         isLoading = false
     }

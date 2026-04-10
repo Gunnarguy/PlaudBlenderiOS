@@ -6,6 +6,7 @@ final class StatsViewModel {
     var stats: Stats?
     var sessionCost: SessionCost?
     var costHistory: CostHistory?
+    var modelPricing: ModelPricing?
     var isLoading = false
     var error: String?
 
@@ -43,10 +44,19 @@ final class StatsViewModel {
         }
     }
 
+    func loadPricing() async {
+        do {
+            modelPricing = try await api.get("/api/costs/pricing")
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func loadAll() async {
         await loadStats()
         await loadSessionCost()
         await loadCostHistory()
+        await loadPricing()
     }
 
     func refresh() async {
