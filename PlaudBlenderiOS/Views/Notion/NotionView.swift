@@ -4,6 +4,7 @@ struct NotionView: View {
     @Environment(NotionViewModel.self) private var viewModel
     @Environment(XRayViewModel.self) private var xray
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showDatabaseSwitcher = false
 
     var body: some View {
         NavigationStack {
@@ -26,6 +27,9 @@ struct NotionView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
                 Task { await viewModel.refreshAfterAuthorization() }
+            }
+            .sheet(isPresented: $showDatabaseSwitcher) {
+                databaseSwitcherSheet
             }
         }
     }
@@ -194,6 +198,18 @@ struct NotionView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(viewModel.isAuthorizing)
+
+                        Button {
+                            Task {
+                                await viewModel.loadDatabases()
+                                showDatabaseSwitcher = true
+                            }
+                        } label: {
+                            Text("Switch DB")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                 }
                 .padding()
@@ -427,6 +443,47 @@ struct NotionView: View {
                 .compactMap({ $0 as? UIWindowScene }).first,
                   let window = scene.windows.first else { return }
             await viewModel.startOAuthFlow(anchor: window)
+        }
+    }
+
+    private var databaseSwitcherSheet: some View {
+        NavigationStack {
+            List(viewModel.databases) { database in
+                Button {
+                    Task {
+                        _ = await viewModel.selectDatabase(dbId: database.id)
+                        showDatabaseSwitcher = false
+                    }
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(database.title)
+                                .font(.subheadline.weight(.semibold))
+                            Text(database.id)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        if viewModel.status?.databaseId == database.id {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("Switch Database")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { showDatabaseSwitcher = false }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Refresh") {
+                        Task { await viewModel.loadDatabases() }
+                    }
+                }
+            }
         }
     }
 

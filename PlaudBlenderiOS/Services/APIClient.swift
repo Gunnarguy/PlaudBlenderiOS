@@ -45,6 +45,8 @@ final class APIClient: Sendable {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let session: URLSession
+    private var preferredServerURLSnapshot: String
+    private var activeServerURL: String
 
     /// Observable connectivity state — drives UI banners
     var isServerReachable: Bool = false
@@ -56,6 +58,8 @@ final class APIClient: Sendable {
 
     init(authManager: AuthManager) {
         self.authManager = authManager
+        self.preferredServerURLSnapshot = authManager.serverURL
+        self.activeServerURL = authManager.serverURL
 
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
@@ -70,9 +74,11 @@ final class APIClient: Sendable {
     }
 
     private var baseURL: URL {
-        guard let url = URL(string: authManager.serverURL) else {
+        syncPreferredServerURLIfNeeded()
+
+        guard let url = URL(string: activeServerURL) else {
             // Fallback — should never happen if AuthManager validates
-            logger.fault("Invalid server URL: \(self.authManager.serverURL, privacy: .public)")
+            logger.fault("Invalid server URL: \(self.activeServerURL, privacy: .public)")
             return URL(string: "http://localhost:8000")!
         }
         return url
@@ -120,7 +126,9 @@ final class APIClient: Sendable {
     // MARK: - Health Check (no auth required)
 
     func healthCheck() async -> Bool {
-        if await checkHealth(at: authManager.serverURL) {
+        syncPreferredServerURLIfNeeded()
+
+        if await checkHealth(at: activeServerURL) {
             return true
         }
 
@@ -130,15 +138,13 @@ final class APIClient: Sendable {
 
     @discardableResult
     func bootstrapConnection() async -> Bool {
+        syncPreferredServerURLIfNeeded()
+
         for candidate in authManager.candidateServerURLs() {
             if await checkHealth(at: candidate) {
-                if candidate != authManager.serverURL {
-                    do {
-                        try authManager.setServerURL(candidate)
-                        logger.info("✅ Updated server URL to \(candidate, privacy: .public)")
-                    } catch {
-                        logger.error("❌ Failed to persist server URL \(candidate, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                    }
+                if candidate != activeServerURL {
+                    activeServerURL = candidate
+                    logger.info("✅ Using reachable server URL \(candidate, privacy: .public)")
                 }
                 return true
             }
@@ -148,6 +154,14 @@ final class APIClient: Sendable {
         lastHealthCheck = Date()
         lastError = "Could not connect to any local Chronos server"
         return false
+    }
+
+    private func syncPreferredServerURLIfNeeded() {
+        let preferred = authManager.serverURL
+        guard preferred != preferredServerURLSnapshot else { return }
+        preferredServerURLSnapshot = preferred
+        activeServerURL = preferred
+        logger.info("🔄 Preferred server URL changed to \(preferred, privacy: .public)")
     }
 
     // MARK: - Private
