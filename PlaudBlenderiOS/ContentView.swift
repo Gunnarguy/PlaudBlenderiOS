@@ -174,7 +174,7 @@ struct ContentView: View {
 
     private var dataTabBadge: String? {
         // Service health warning takes priority
-        if let sys = sync.systemStatus, sync.healthyServiceCount < 6, !sync.isRunning {
+        if sync.systemStatus != nil, sync.healthyServiceCount < 6, !sync.isRunning {
             let down = 6 - sync.healthyServiceCount
             return "\(down)"
         }

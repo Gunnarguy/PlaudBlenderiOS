@@ -156,6 +156,11 @@ final class SyncViewModel {
             pipelineStatus = status
             lastUpdated = Date()
             updateRunningState(from: status)
+        } catch is CancellationError {
+            // Task was cancelled — do not surface as an error or kill monitoring
+            return
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return
         } catch {
             self.error = error.localizedDescription
             if showLoading {
@@ -195,9 +200,10 @@ final class SyncViewModel {
             let body = PipelineRunRequest(stage: stage)
             let response: PipelineRunResponse = try await api.post("/api/sync/run", body: body)
             lastMessage = response.message
-            startMonitoring()
+            // loadAll → loadStatus → updateRunningState will start monitoring
             await loadAll()
         } catch {
+            if Task.isCancelled { return }
             self.error = error.localizedDescription
             isRunning = false
             stopMonitoring()
@@ -508,6 +514,10 @@ final class SyncViewModel {
 
     private func monitorLoop() async {
         defer { monitorTask = nil }
+
+        // Brief delay on first iteration to avoid racing with the
+        // loadAll() call that triggered monitoring in the first place.
+        try? await Task.sleep(nanoseconds: 750_000_000)
 
         while !Task.isCancelled {
             await loadStatus(showLoading: false)
