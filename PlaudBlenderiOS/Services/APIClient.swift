@@ -54,6 +54,10 @@ final class APIClient: Sendable {
     var lastError: String?
     var networkEvents: [ClientNetworkEvent] = []
 
+    var resolvedServerURL: String {
+        activeServerURL
+    }
+
     private let maxNetworkEvents = 300
 
     init(authManager: AuthManager) {

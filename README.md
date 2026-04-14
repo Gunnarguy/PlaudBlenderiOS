@@ -6,7 +6,7 @@ Native SwiftUI client for [Chronos](https://github.com/gunnarhostetler/PlaudBlen
 
 - **SwiftUI** with `@Observable` MVVM pattern
 - **URLSession** async/await networking — no external dependencies
-- **TabView** navigation: Timeline, Topics, Search, Graph, Stats, More
+- **Bottom navigation**: Timeline, Search, Stats, Graph, Data, System, Settings
 - **Cytoscape.js** knowledge graph rendered in WKWebView
 - **Swift Charts** for stats visualization
 - **Security framework** Keychain for token storage
@@ -23,7 +23,7 @@ Native SwiftUI client for [Chronos](https://github.com/gunnarhostetler/PlaudBlen
 2. Open `PlaudBlenderiOS.xcodeproj` in Xcode
 3. Start the Chronos backend: `cd ../PlaudBlender && python -m uvicorn api.main:app --port 8000`
 4. Build and run on simulator or device
-5. In Settings, configure the server URL (default: `http://localhost:8000`)
+5. In Settings, configure the server URL if needed. The app ships with `ChronosServerURL` from `Info.plist` and falls back through known Pi and simulator URLs.
 
 ## Project Structure
 
@@ -40,6 +40,7 @@ PlaudBlenderiOS/
     Graph/         → Cytoscape.js knowledge graph (WKWebView)
     Stats/         → Charts, stat cards, cost tracking
     Sync/          → Pipeline dashboard, workflow controls
+    System/        → Native runtime diagnostics and backend health
     Notion/        → Notion import and sync
     Settings/      → Server config, auth, about
     XRay/          → Live telemetry monitor
@@ -52,14 +53,27 @@ PlaudBlenderiOS/
 
 The app connects to the Chronos FastAPI backend (55 routes) built in the PlaudBlender repo under `api/`. Key endpoints:
 
-| Area       | Endpoints                                                   |
-| ---------- | ----------------------------------------------------------- |
-| Timeline   | `GET /api/days`, `GET /api/days/{date}`                     |
-| Recordings | `GET /api/recordings/{id}`                                  |
-| Search     | `POST /api/search`, `POST /api/search/ask`                  |
-| Topics     | `GET /api/topics`, `GET /api/topics/{name}/timeline`        |
-| Graph      | `GET /api/graph`                                            |
-| Stats      | `GET /api/stats`                                            |
-| Sync       | `POST /api/sync/run`, `GET /api/sync/status`                |
-| Costs      | `GET /api/costs/session`, `GET /api/costs/history`          |
-| Auth       | `GET /api/auth/plaud/status`, `GET /api/auth/notion/status` |
+| Area       | Endpoints                                                                      |
+| ---------- | ------------------------------------------------------------------------------ |
+| Timeline   | `GET /api/days`, `GET /api/days/{date}`                                        |
+| Recordings | `GET /api/recordings/{id}`                                                     |
+| Search     | `POST /api/search`, `POST /api/search/ask`                                     |
+| Topics     | `GET /api/topics`, `GET /api/topics/{name}/timeline`                           |
+| Graph      | `GET /api/graph`                                                               |
+| Stats      | `GET /api/stats`                                                               |
+| Sync       | `POST /api/sync/run`, `GET /api/sync/status`                                   |
+| System     | `GET /api/status`, `GET /api/xray/events`, `GET /api/admin/runtime` (optional) |
+| Costs      | `GET /api/costs/session`, `GET /api/costs/history`                             |
+| Auth       | `GET /api/auth/plaud/status`, `GET /api/auth/notion/status`                    |
+
+## Runtime Diagnostics Contract
+
+The native System screen works today with `GET /api/status` plus `GET /api/xray/events`, and it becomes richer still when the backend also exposes `GET /api/admin/runtime` with these top-level keys:
+
+- `runtime_health`: summary, pass or warn or fail counts, overall ok flag
+- `runtime_manager`: manager name, mode, watchdog state, last verification timestamp
+- `services`: runtime-managed service states with names, display names, enabled flags, health, unit names, and detail text
+- `ports`: core ports with port number, protocol, reachability, URL, and detail text
+- `signals`: recent operational events from watchdog, sync, or service monitors
+- `plaud_auth`: Plaud auth state and detail
+- `notes`: optional plain-text operator notes

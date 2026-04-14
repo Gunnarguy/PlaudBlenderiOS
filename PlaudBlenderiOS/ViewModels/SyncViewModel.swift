@@ -137,6 +137,21 @@ final class SyncViewModel {
             || !progressEntries.isEmpty
     }
 
+    var actionableFailureCount: Int {
+        if let syncFailures {
+            return syncFailures.actionableCount
+        }
+        return dbStats?.failed ?? 0
+    }
+
+    var hasFailureBreakdown: Bool {
+        syncFailures != nil
+    }
+
+    var shouldShowRetryableFailures: Bool {
+        actionableFailureCount > 0
+    }
+
     func bootstrap() async {
         hasBootstrapped = true
         await loadAll()

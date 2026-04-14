@@ -57,9 +57,9 @@ struct SyncDashboardView: View {
                         compatibilityCard
                     }
 
-                    if viewModel.supportsSyncFailuresEndpoint,
-                       let failures = viewModel.syncFailures,
-                       failures.actionableCount > 0 || failures.archivedCount > 0 {
+                          if viewModel.supportsSyncFailuresEndpoint,
+                              let failures = viewModel.syncFailures,
+                              failures.actionableCount > 0 {
                         failuresCard(failures)
                     }
 
@@ -177,7 +177,13 @@ struct SyncDashboardView: View {
                     counterChip("\(db.completed)", "done", .green)
                     counterChip("\(db.processing)", "running", .blue)
                     counterChip("\(db.pending)", "queued", .yellow)
-                    counterChip("\(db.failed)", "failed", .red)
+                    if viewModel.hasFailureBreakdown {
+                        if viewModel.shouldShowRetryableFailures {
+                            counterChip("\(viewModel.actionableFailureCount)", "retryable", .orange)
+                        }
+                    } else if db.failed > 0 {
+                        counterChip("\(db.failed)", "failed", .red)
+                    }
                 }
             }
 
@@ -644,7 +650,13 @@ struct SyncDashboardView: View {
                         miniStat("\(db.completed)", "done", .green)
                         miniStat("\(db.pending)", "pending", .yellow)
                         miniStat("\(db.processing)", "running", .blue)
-                        miniStat("\(db.failed)", "failed", .red)
+                        if viewModel.hasFailureBreakdown {
+                            if viewModel.shouldShowRetryableFailures {
+                                miniStat("\(viewModel.actionableFailureCount)", "retryable", .orange)
+                            }
+                        } else if db.failed > 0 {
+                            miniStat("\(db.failed)", "failed", .red)
+                        }
                         miniStat("\(db.noTranscript)", "no transcript", .orange)
                     }
                 }
@@ -780,40 +792,59 @@ struct SyncDashboardView: View {
     private func failuresCard(_ failures: SyncFailureSummary) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Sync Failures", systemImage: "exclamationmark.triangle")
+                Label("Retryable Sync Issues", systemImage: "exclamationmark.triangle")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Button("Retry Actionable") { Task { await viewModel.resetStuck() } }
+                Button("Retry") { Task { await viewModel.resetStuck() } }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
 
-            HStack(spacing: 12) {
-                miniStat("\(failures.actionableCount)", "actionable", .orange)
-                miniStat("\(failures.archivedCount)", "archived", .secondary)
-            }
+            miniStat("\(failures.actionableCount)", "retryable", .orange)
+
+            Text("These items are still eligible for retry.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
             ForEach(failures.actionable.prefix(4)) { item in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title ?? item.recordingId ?? "Recording")
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    Text(item.reason ?? item.error)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(.thinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                failureItemRow(item, tint: .orange)
             }
         }
         .padding()
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal)
+    }
+
+    private func failureItemRow(_ item: SyncFailureItem, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 6, height: 6)
+                Text(item.title ?? item.recordingId ?? "Recording")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+
+            if let reason = item.reason, !reason.isEmpty {
+                Text(reason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+
+            if let source = item.source, !source.isEmpty {
+                Text(source.capitalized)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func miniStat(_ value: String, _ label: String, _ color: Color = .primary) -> some View {

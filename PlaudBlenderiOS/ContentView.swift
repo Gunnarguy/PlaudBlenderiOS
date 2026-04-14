@@ -72,6 +72,8 @@ struct ContentView: View {
             GraphContainerView(viewModel: vmCache.graph(api: api))
         case .data:
             DataView()
+        case .system:
+            SystemView(viewModel: vmCache.system(api: api))
         case .settings:
             SettingsView(viewModel: vmCache.settings(api: api, auth: authManager))
         }
@@ -165,6 +167,8 @@ struct ContentView: View {
         switch tab {
         case .data:
             return dataTabBadge
+        case .system:
+            return systemTabBadge
         case .settings:
             return settingsTabBadge
         default:
@@ -202,6 +206,16 @@ struct ContentView: View {
         return count > 0 ? "\(count)" : nil
     }
 
+    private var systemTabBadge: String? {
+        if !api.isServerReachable {
+            return "!"
+        }
+        if sync.systemStatus != nil, sync.healthyServiceCount < 6 {
+            return "\(6 - sync.healthyServiceCount)"
+        }
+        return nil
+    }
+
 }
 
 private enum AppTab: String, Hashable, CaseIterable {
@@ -210,6 +224,7 @@ private enum AppTab: String, Hashable, CaseIterable {
     case stats
     case graph
     case data
+    case system
     case settings
 
     var title: String {
@@ -219,6 +234,7 @@ private enum AppTab: String, Hashable, CaseIterable {
         case .stats: return "Stats"
         case .graph: return "Graph"
         case .data: return "Data"
+        case .system: return "System"
         case .settings: return "Settings"
         }
     }
@@ -230,6 +246,7 @@ private enum AppTab: String, Hashable, CaseIterable {
         case .stats: return "chart.bar.xaxis"
         case .graph: return "point.3.connected.trianglepath.dotted"
         case .data: return "arrow.triangle.2.circlepath"
+        case .system: return "server.rack"
         case .settings: return "gear"
         }
     }
@@ -243,6 +260,7 @@ private final class ViewModelCache {
     private var _search: SearchViewModel?
     private var _stats: StatsViewModel?
     private var _graph: GraphViewModel?
+    private var _system: SystemViewModel?
     private var _settings: SettingsViewModel?
 
     func timeline(api: APIClient) -> TimelineViewModel {
@@ -270,6 +288,13 @@ private final class ViewModelCache {
         if let vm = _graph { return vm }
         let vm = GraphViewModel(api: api)
         _graph = vm
+        return vm
+    }
+
+    func system(api: APIClient) -> SystemViewModel {
+        if let vm = _system { return vm }
+        let vm = SystemViewModel(api: api)
+        _system = vm
         return vm
     }
 
