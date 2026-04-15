@@ -21,9 +21,9 @@ Native SwiftUI client for [Chronos](https://github.com/gunnarhostetler/PlaudBlen
 
 1. Clone the repo
 2. Open `PlaudBlenderiOS.xcodeproj` in Xcode
-3. Start the Chronos backend: `cd ../PlaudBlender && python -m uvicorn api.main:app --port 8000`
+3. Ensure the Pi-hosted Chronos backend is running and reachable
 4. Build and run on simulator or device
-5. In Settings, configure the server URL if needed. The app ships with `ChronosServerURL` from `Info.plist` and falls back through known Pi and simulator URLs.
+5. In Settings, only override the server URL if you intentionally want a different Pi or private network endpoint. The app defaults to the canonical Pi public API from `Info.plist` and falls back to the Pi LAN IP.
 
 ## Project Structure
 

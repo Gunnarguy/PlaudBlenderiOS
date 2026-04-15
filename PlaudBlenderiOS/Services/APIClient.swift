@@ -83,7 +83,7 @@ final class APIClient: Sendable {
         guard let url = URL(string: activeServerURL) else {
             // Fallback — should never happen if AuthManager validates
             logger.fault("Invalid server URL: \(self.activeServerURL, privacy: .public)")
-            return URL(string: "http://localhost:8000")!
+            return URL(string: AuthManager.defaultServerURL)!
         }
         return url
     }

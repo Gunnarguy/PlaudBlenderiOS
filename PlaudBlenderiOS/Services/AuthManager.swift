@@ -9,16 +9,15 @@ private let logger = Logger(subsystem: "com.gunndamental.PlaudBlenderiOS", categ
 final class AuthManager: Sendable {
     private static let apiKeyKey = "chronos_api_key"
     private static let serverURLKey = "chronos_server_url"
-    private static let localLoopbackURL = "http://127.0.0.1:8000"
     private static let serverURLInfoPlistKey = "ChronosServerURL"
 
     /// Pi's known LAN IP for fast local access on home Wi-Fi.
     private static let piLanURL = "http://10.0.0.170:8000"
-    /// Temporary direct-Mac recovery URL from local debugging.
-    private static let temporaryMacRecoveryURL = "http://10.0.0.175:8000"
-    /// Temporary ngrok recovery URL from local debugging.
-    private static let temporaryNgrokRecoveryURL = "https://3796-12-216-111-84.ngrok-free.app"
-    /// Reserved ngrok tunnel — canonical public backend URL.
+    /// Legacy Mac-local recovery URL from earlier debugging sessions.
+    private static let legacyMacRecoveryHost = "10.0.0.175"
+    /// Legacy temporary ngrok API URL from earlier debugging sessions.
+    private static let legacyNgrokRecoveryHost = "3796-12-216-111-84.ngrok-free.app"
+    /// Reserved ngrok tunnel — canonical public backend URL for the Pi API.
     private static let ngrokURL = "https://glairy-ona-irreplaceable.ngrok-free.dev"
 
     /// Default server URL — uses Info.plist value (ngrok), then falls back.
@@ -66,23 +65,14 @@ final class AuthManager: Sendable {
             candidates.append(configuredServerURL)
         }
 
-        // 3. ngrok tunnel (works from anywhere — cell, work, etc.)
+        // 3. Canonical public Pi API tunnel (works from anywhere)
         candidates.append(Self.ngrokURL)
 
         // 4. Pi's LAN IP (faster when on home Wi-Fi)
         candidates.append(Self.piLanURL)
 
-        // 5. Tailscale IP (works from anywhere if Tailscale is running)
-        // Users set this via Settings; it gets stored in Keychain and appears as #1 above.
-
-        // 5. Simulator-only: detect Mac's LAN IP for local dev
-        #if targetEnvironment(simulator)
-        if let lanIP = Self.detectLanIP() {
-            candidates.append("http://\(lanIP):8000")
-        }
-        candidates.append(Self.localLoopbackURL)
-        candidates.append("http://localhost:8000")
-        #endif
+        // 5. Optional Tailscale/private Pi URL, if the user set one manually.
+        // That value is stored in Keychain and appears as #1 above.
 
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }
@@ -123,16 +113,16 @@ final class AuthManager: Sendable {
             rawValue = "http://\(rawValue)"
         }
 
-        if rawValue == temporaryMacRecoveryURL || rawValue == temporaryNgrokRecoveryURL {
-            rawValue = ngrokURL
-        }
-
         guard let components = URLComponents(string: rawValue),
               let scheme = components.scheme?.lowercased(),
               ["http", "https"].contains(scheme),
               let host = components.host,
               !host.isEmpty else {
             return nil
+        }
+
+        if host == legacyMacRecoveryHost || host == legacyNgrokRecoveryHost {
+            return ngrokURL
         }
 
         var normalized = "\(scheme)://\(host)"
@@ -148,42 +138,5 @@ final class AuthManager: Sendable {
         }
 
         return host == "localhost" || host == "127.0.0.1" || host == "::1"
-    }
-
-    /// Returns the first non-loopback IPv4 address (en0/en1), or nil.
-    private static func detectLanIP() -> String? {
-        var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
-        defer { freeifaddrs(ifaddr) }
-
-        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let iface = ptr.pointee
-            guard let address = iface.ifa_addr else { continue }
-            let family = iface.ifa_addr.pointee.sa_family
-            guard family == UInt8(AF_INET) else { continue } // IPv4 only
-
-            let flags = Int32(iface.ifa_flags)
-            let isUp = (flags & IFF_UP) != 0 && (flags & IFF_RUNNING) != 0
-            let isLoopback = (flags & IFF_LOOPBACK) != 0
-            guard isUp && !isLoopback else { continue }
-
-            let name = String(cString: iface.ifa_name)
-            let excludedPrefixes = ["lo", "utun", "awdl", "llw", "bridge"]
-            guard !excludedPrefixes.contains(where: name.hasPrefix) else { continue }
-
-            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(
-                address, socklen_t(address.pointee.sa_len),
-                &hostname, socklen_t(hostname.count),
-                nil, 0, NI_NUMERICHOST
-            )
-            if result == 0 {
-                let ip = String(cString: hostname)
-                logger.info("🌐 Detected LAN IP: \(ip, privacy: .public) on \(name, privacy: .public)")
-                return ip
-            }
-        }
-        logger.warning("⚠️ Could not detect LAN IP, falling back to localhost")
-        return nil
     }
 }
