@@ -568,7 +568,7 @@ final class SystemViewModel {
         }
 
         if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-            return "Local Simulator"
+            return "Debug Loopback"
         }
         if host.contains("ngrok") {
             return "Ngrok Tunnel"

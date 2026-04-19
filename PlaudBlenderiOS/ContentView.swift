@@ -194,8 +194,8 @@ struct ContentView: View {
             if pending > 0 { return "\(pending)" }
             return "!"
         }
-        if notion.unmatchedCount > 0 {
-            return "\(notion.unmatchedCount)"
+        if notion.serverPendingImport > 0 {
+            return "\(notion.serverPendingImport)"
         }
         return nil
     }

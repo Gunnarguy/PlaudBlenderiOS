@@ -186,7 +186,7 @@ final class APIClient: Sendable {
 
         isServerReachable = false
         lastHealthCheck = Date()
-        lastError = "Could not connect to any local Chronos server"
+        lastError = "Could not connect to the Chronos API at the configured public or LAN endpoints"
         return false
     }
 

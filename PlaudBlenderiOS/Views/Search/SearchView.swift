@@ -25,9 +25,15 @@ struct SearchView: View {
                     dateRangeIndicator
                 }
 
+                if let error = viewModel.error {
+                    errorBanner(error)
+                }
+
                 // Results
                 if viewModel.isSearching {
                     LoadingView(message: "Searching...")
+                } else if viewModel.aiAnswer != nil || !viewModel.results.isEmpty {
+                    resultsList
                 } else if viewModel.results.isEmpty && !viewModel.query.isEmpty {
                     EmptyStateView(
                         icon: "magnifyingglass",
@@ -176,11 +182,13 @@ struct SearchView: View {
                     AIAnswerCardView(answer: answer)
                 }
 
-                Text("\(viewModel.total) results")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
+                if !viewModel.results.isEmpty {
+                    Text("\(viewModel.total) results")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                }
 
                 ForEach(viewModel.results) { result in
                     SearchResultCardView(result: result)
@@ -188,6 +196,15 @@ struct SearchView: View {
             }
             .padding()
         }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        Text(message)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal)
+            .padding(.bottom, 8)
     }
 }
 
@@ -261,8 +278,10 @@ struct AskChronosSheet: View {
                     let q = question
                     let r = reasoning
                     Task {
-                        await viewModel.askAI(question: q, reasoning: r)
-                        dismiss()
+                        let succeeded = await viewModel.askAI(question: q, reasoning: r)
+                        if succeeded {
+                            dismiss()
+                        }
                     }
                 } label: {
                     if viewModel.isAskingAI {
@@ -275,6 +294,13 @@ struct AskChronosSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(question.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isAskingAI)
+
+                if let error = viewModel.error {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 // Previous answer
                 if let answer = viewModel.aiAnswer {

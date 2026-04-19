@@ -10,6 +10,7 @@ final class AuthManager: Sendable {
     private static let apiKeyKey = "chronos_api_key"
     private static let serverURLKey = "chronos_server_url"
     private static let serverURLInfoPlistKey = "ChronosServerURL"
+    private static let allowLoopbackLaunchArgument = "-PlaudBlenderAllowLoopbackServer"
 
     /// Pi's known LAN IP for fast local access on home Wi-Fi.
     private static let piLanURL = "http://10.0.0.170:8000"
@@ -86,7 +87,7 @@ final class AuthManager: Sendable {
         KeychainService.delete(key: Self.apiKeyKey)
     }
 
-    // MARK: - LAN IP Detection
+    // MARK: - Server Resolution
 
     private static var configuredServerURL: String? {
         normalizedServerURL(Bundle.main.object(forInfoDictionaryKey: serverURLInfoPlistKey) as? String)
@@ -97,10 +98,18 @@ final class AuthManager: Sendable {
             return nil
         }
 
-        #if targetEnvironment(simulator)
+        if isLoopbackURL(normalized) {
+            return allowsLoopbackServerURL ? normalized : configuredServerURL
+        }
+
         return normalized
+    }
+
+    private static var allowsLoopbackServerURL: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains(allowLoopbackLaunchArgument)
         #else
-        return isLoopbackURL(normalized) ? configuredServerURL : normalized
+        false
         #endif
     }
 

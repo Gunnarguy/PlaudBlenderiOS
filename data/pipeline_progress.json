@@ -1,0 +1,24 @@
+{
+  "run_id": "e74989c10de2",
+  "status": "completed",
+  "current_phase": "index",
+  "started_at": 1775860346.747416,
+  "finished_at": 1775860412.8606899,
+  "elapsed_seconds": 66.1,
+  "trigger": "cli",
+  "phases": [
+    {
+      "name": "index",
+      "status": "completed",
+      "total_items": 2806,
+      "completed_items": 0,
+      "current_step": "Generating embeddings for 2806 events\u2026",
+      "current_item": "",
+      "started_at": 1775860348.509763,
+      "finished_at": 1775860412.844509,
+      "elapsed_seconds": 64.33474588394165,
+      "summary": "2806 events indexed",
+      "error": ""
+    }
+  ]
+}

@@ -14,6 +14,8 @@ final class NotionViewModel: NSObject {
     var isLoading = false
     var isLoadingMore = false
     var isAuthorizing = false
+    var importPreview: NotionImportPreview?
+    var matchReview: NotionMatchReview?
     var isImporting = false
     var selectedDatabaseId: String?
     var error: String?
@@ -71,6 +73,46 @@ final class NotionViewModel: NSObject {
         recordings.filter(\.isImportedToChronos).count
     }
 
+    var serverPendingImport: Int {
+        importPreview?.pendingImport ?? unmatchedCount
+    }
+
+    var serverPendingImportRaw: Int {
+        importPreview?.pendingImportRaw ?? serverPendingImport
+    }
+
+    var duplicatePagesCollapsed: Int {
+        importPreview?.duplicatePagesCollapsed ?? 0
+    }
+
+    var matchedToExistingCount: Int {
+        importPreview?.matchedToExisting ?? importedCount
+    }
+
+    var safeBatchLimit: Int {
+        max(1, importPreview?.blindImportLimit ?? 25)
+    }
+
+    var duplicateGroups: [NotionDuplicateGroup] {
+        matchReview?.duplicateGroups ?? []
+    }
+
+    var highConfidenceTranscriptAliases: [NotionTranscriptAliasCandidate] {
+        matchReview?.highConfidenceTranscriptAliases ?? []
+    }
+
+    var manualOverrides: [String: String] {
+        matchReview?.manualOverrides ?? [:]
+    }
+
+    var manualOverrideCount: Int {
+        matchReview?.manualOverrideCount ?? manualOverrides.count
+    }
+
+    var duplicateGroupCount: Int {
+        matchReview?.duplicateGroupCount ?? duplicateGroups.count
+    }
+
     var shouldShowDatabasePicker: Bool {
         isAuthenticated && !hasSelectedDatabase
     }
@@ -104,6 +146,108 @@ final class NotionViewModel: NSObject {
         }
     }
 
+    func loadImportPreview() async {
+        do {
+            importPreview = try await api.get("/api/notion/import/preview")
+        } catch {
+            importPreview = nil
+        }
+    }
+
+    func loadMatchReview(limit: Int = 10) async {
+        do {
+            matchReview = try await api.get(
+                "/api/notion/match/review",
+                query: ["limit": "\(limit)"]
+            )
+        } catch {
+            matchReview = nil
+        }
+    }
+
+    func startImport(process: Bool = true, index: Bool = true, batchSize: Int? = nil) async -> Bool {
+        Haptics.impact()
+        isImporting = true
+        error = nil
+        do {
+            let body = NotionImportRequest(
+                process: process,
+                index: index,
+                batchSize: batchSize ?? safeBatchLimit,
+                force: nil
+            )
+            let response: SuccessResponse = try await api.post("/api/notion/import/next-batch", body: body)
+            lastMessage = response.message
+            await loadImportProgress()
+            await loadImportPreview()
+            startImportMonitoring()
+            return response.success
+        } catch {
+            self.error = error.localizedDescription
+            isImporting = false
+            return false
+        }
+    }
+
+    func applyManualOverride(pageId: String, recordingId: String) async -> Bool {
+        let trimmed = recordingId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            error = "Recording ID is required"
+            return false
+        }
+
+        do {
+            let body = NotionMatchOverrideRequest(pageId: pageId, recordingId: trimmed, clear: false)
+            let response: SuccessResponse = try await api.post("/api/notion/match/override", body: body)
+            lastMessage = response.message
+            await refreshReconciliationState()
+            return response.success
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func clearManualOverride(pageId: String) async -> Bool {
+        do {
+            let body = NotionMatchOverrideRequest(pageId: pageId, recordingId: nil, clear: true)
+            let response: SuccessResponse = try await api.post("/api/notion/match/override", body: body)
+            lastMessage = response.message
+            await refreshReconciliationState()
+            return response.success
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func applyBulkOverride(pageIds: [String], recordingId: String) async -> Bool {
+        let trimmed = recordingId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            error = "Recording ID is required"
+            return false
+        }
+
+        do {
+            let overrides = pageIds.map {
+                NotionMatchOverrideRequest(pageId: $0, recordingId: trimmed, clear: false)
+            }
+            let body = NotionBulkMatchOverrideRequest(overrides: overrides)
+            let response: NotionBulkMatchOverrideResponse = try await api.post("/api/notion/match/override/bulk", body: body)
+            if response.failed > 0 {
+                lastMessage = "Applied \(response.applied) overrides, \(response.failed) failed"
+                error = response.results.first(where: { !$0.ok })?.message
+            } else {
+                lastMessage = "Applied \(response.applied) overrides"
+            }
+            await refreshReconciliationState()
+            return response.failed == 0
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
     func loadStatus() async {
         do {
             status = try await api.get("/api/notion/status")
@@ -115,10 +259,13 @@ final class NotionViewModel: NSObject {
     func loadDatabases() async {
         do {
             databases = try await api.get("/api/notion/databases")
+            await loadImportPreview()
+            await loadMatchReview()
         } catch {
             self.error = error.localizedDescription
         }
     }
+
 
     func selectDatabase(dbId: String) async -> Bool {
         do {
@@ -188,6 +335,7 @@ final class NotionViewModel: NSObject {
             updateImportingState()
         } catch {
             importProgress = nil
+            updateImportingState()
         }
     }
 
@@ -341,9 +489,17 @@ final class NotionViewModel: NSObject {
                 try? await Task.sleep(nanoseconds: nextImportPollDelayNanoseconds())
             } else {
                 await loadRecordings()
+                await loadImportPreview()
+                await loadMatchReview()
                 break
             }
         }
+    }
+
+    private func refreshReconciliationState() async {
+        await loadRecordings()
+        await loadImportPreview()
+        await loadMatchReview()
     }
 }
 

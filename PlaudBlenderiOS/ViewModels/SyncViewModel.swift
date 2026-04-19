@@ -356,11 +356,24 @@ final class SyncViewModel {
 
         isRunningStackAction = true
         defer { isRunningStackAction = false }
+        error = nil
 
         do {
             let response: StackControlResponse = try await api.post("/api/admin/stack/\(action)")
             stackControl = response
-            lastMessage = response.message
+            if response.status.lowercased() == "ok" {
+                lastMessage = response.message
+            } else {
+                lastMessage = nil
+                error = response.message.isEmpty
+                    ? "Stack action \(response.action) reported \(response.status)."
+                    : response.message
+            }
+
+            if action != "restart-public" {
+                await loadSystemStatus()
+            }
+
             if action != "restart-public" {
                 await loadBackups()
                 await loadUploadCandidates()

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(NotionViewModel.self) private var notion
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable var viewModel: SettingsViewModel
 
     var body: some View {
@@ -41,6 +42,15 @@ struct SettingsView: View {
                         .disabled(viewModel.apiToken.isEmpty)
                 }
 
+                if let error = viewModel.error, !error.isEmpty {
+                    Section("Last Error") {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    }
+                }
+
                 // Plaud auth status
                 Section("Plaud Connection") {
                     if let status = viewModel.plaudStatus {
@@ -49,14 +59,41 @@ struct SettingsView: View {
                                 .foregroundStyle(status.isAuthenticated ? .green : .red)
                             Text(status.isAuthenticated ? "Authenticated" : "Not Connected")
                         }
+                        if status.hasAccessToken, !status.isAuthenticated {
+                            Text("Access token exists, but the current Plaud session is not authenticated.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         if let expires = status.expiresAt {
                             Text("Expires: \(expires)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        Text("Connect opens Plaud in Safari. The Raspberry Pi completes the token exchange and stores the Plaud tokens on the server.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            startPlaudOAuth()
+                        } label: {
+                            Label(status.isAuthenticated ? "Reconnect Plaud" : "Connect Plaud", systemImage: "mic.badge.plus")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.isAuthorizingPlaud)
                     } else {
                         Text("Status unknown")
                             .foregroundStyle(.secondary)
+                        Text("Connect opens Plaud in Safari. The Raspberry Pi completes the token exchange and stores the Plaud tokens on the server.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            startPlaudOAuth()
+                        } label: {
+                            Label("Connect Plaud", systemImage: "mic.badge.plus")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.isAuthorizingPlaud)
                     }
                 }
 
@@ -259,6 +296,10 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .task { await viewModel.loadAll() }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                Task { await viewModel.refreshAfterPlaudAuthorization() }
+            }
         }
     }
 
@@ -322,6 +363,15 @@ struct SettingsView: View {
                 .compactMap({ $0 as? UIWindowScene }).first,
                   let window = scene.windows.first else { return }
             await notion.startOAuthFlow(anchor: window)
+        }
+    }
+
+    private func startPlaudOAuth() {
+        Task {
+            guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).first,
+                  let window = scene.windows.first else { return }
+            await viewModel.startPlaudOAuthFlow(anchor: window)
         }
     }
 }

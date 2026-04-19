@@ -47,7 +47,8 @@ final class SearchViewModel {
         isSearching = false
     }
 
-    func askAI(question: String, reasoning: String? = nil) async {
+    @discardableResult
+    func askAI(question: String, reasoning: String? = nil) async -> Bool {
         Haptics.impact()
         isAskingAI = true
         error = nil
@@ -55,10 +56,13 @@ final class SearchViewModel {
             let request = AskRequest(question: question, reasoning: reasoning)
             let response: AIAnswer = try await api.post("/api/search/ask", body: request)
             aiAnswer = response
+            isAskingAI = false
+            return true
         } catch {
             self.error = error.localizedDescription
         }
         isAskingAI = false
+        return false
     }
 
     func clear() {

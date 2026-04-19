@@ -693,23 +693,32 @@ struct SyncDashboardView: View {
 
             // Qdrant detail inline when available
             if let qdrant = viewModel.systemStatus?.qdrant {
-                HStack(spacing: 8) {
-                    Image(systemName: qdrant.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(qdrant.ok ? .green : .red)
-                        .font(.caption)
-                    Text("Qdrant")
-                        .font(.caption.weight(.medium))
-                    if let collections = qdrant.collections {
-                        Text("· \(collections) collection\(collections == 1 ? "" : "s")")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Image(systemName: qdrant.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(qdrant.ok ? .green : .red)
+                            .font(.caption)
+                        Text("Qdrant")
+                            .font(.caption.weight(.medium))
+                        if let collections = qdrant.collections {
+                            Text("· \(collections) collection\(collections == 1 ? "" : "s")")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let url = qdrant.url {
+                            Spacer()
+                            Text(url)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
                     }
-                    if let url = qdrant.url {
-                        Spacer()
-                        Text(url)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+
+                    if let error = qdrant.error, !error.isEmpty {
+                        Text(error)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                            .lineLimit(3)
                     }
                 }
                 .padding(8)
@@ -718,7 +727,7 @@ struct SyncDashboardView: View {
             }
 
             HStack(spacing: 8) {
-                adminButton("Stack Status") {
+                adminButton("Pi Stack Status") {
                     Task { await viewModel.runStackAction("status") }
                 }
                 adminButton("Ensure Public") {
@@ -758,12 +767,27 @@ struct SyncDashboardView: View {
             if let stackControl = viewModel.stackControl {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text(stackControl.action)
+                        Label(stackControl.action, systemImage: stackStatusIcon(stackControl.status))
                             .font(.caption.weight(.semibold))
+                            .foregroundStyle(stackStatusColor(stackControl.status))
                         Spacer()
                         Text(stackControl.status.capitalized)
                             .font(.caption2)
-                            .foregroundStyle(stackControl.status == "ok" ? .green : .secondary)
+                            .foregroundStyle(stackStatusColor(stackControl.status))
+                    }
+
+                    if !stackControl.message.isEmpty {
+                        Text(stackControl.message)
+                            .font(.caption)
+                            .foregroundStyle(stackStatusColor(stackControl.status))
+                    }
+
+                    if stackControl.action == "status",
+                       stackControl.status.lowercased() != "ok",
+                       viewModel.systemStatus?.qdrant?.ok == true {
+                        Text("Qdrant health is currently green, so this stack result reflects the Pi's managed stack status rather than the active API connection.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
 
                     if let publicURL = stackControl.publicURL, !publicURL.isEmpty {
@@ -779,7 +803,7 @@ struct SyncDashboardView: View {
                         .lineLimit(8)
                 }
                 .padding(10)
-                .background(.thinMaterial)
+                .background(stackStatusColor(stackControl.status).opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             }
         }
@@ -860,6 +884,32 @@ struct SyncDashboardView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 6)
+    }
+
+    private func stackStatusColor(_ status: String) -> Color {
+        switch status.lowercased() {
+        case "ok", "healthy", "success":
+            return .green
+        case "warn", "warning":
+            return .orange
+        case "failed", "error", "down":
+            return .red
+        default:
+            return .secondary
+        }
+    }
+
+    private func stackStatusIcon(_ status: String) -> String {
+        switch status.lowercased() {
+        case "ok", "healthy", "success":
+            return "checkmark.circle.fill"
+        case "warn", "warning":
+            return "exclamationmark.triangle.fill"
+        case "failed", "error", "down":
+            return "xmark.circle.fill"
+        default:
+            return "info.circle.fill"
+        }
     }
 
     // MARK: - 5. Upload Candidates

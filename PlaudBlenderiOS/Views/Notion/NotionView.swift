@@ -5,6 +5,11 @@ struct NotionView: View {
     @Environment(XRayViewModel.self) private var xray
     @Environment(\.scenePhase) private var scenePhase
     @State private var showDatabaseSwitcher = false
+    @State private var showBulkImportConfirmation = false
+    @State private var selectedOverrideTarget: NotionRecording?
+    @State private var overrideRecordingId = ""
+    @State private var selectedDuplicateGroup: NotionDuplicateGroup?
+    @State private var groupOverrideRecordingId = ""
 
     var body: some View {
         NavigationStack {
@@ -28,8 +33,22 @@ struct NotionView: View {
                 guard newPhase == .active else { return }
                 Task { await viewModel.refreshAfterAuthorization() }
             }
+            .alert("Start Safe Notion Batch?", isPresented: $showBulkImportConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Import Next Safe Batch") {
+                    Task { _ = await viewModel.startImport() }
+                }
+            } message: {
+                Text(safeBatchWarningMessage)
+            }
             .sheet(isPresented: $showDatabaseSwitcher) {
                 databaseSwitcherSheet
+            }
+            .sheet(item: $selectedOverrideTarget) { recording in
+                manualOverrideSheet(for: recording)
+            }
+            .sheet(item: $selectedDuplicateGroup) { group in
+                duplicateGroupOverrideSheet(for: group)
             }
         }
     }
@@ -218,7 +237,7 @@ struct NotionView: View {
                 .padding(.horizontal)
 
                 HStack(spacing: 12) {
-                    statCard(title: "Ready", value: "\(viewModel.unmatchedCount)", color: .orange)
+                    statCard(title: "Loaded Unmatched", value: "\(viewModel.unmatchedCount)", color: .orange)
                     statCard(title: "Imported", value: "\(viewModel.importedCount)", color: .green)
                     statCard(title: "Total", value: "\(status.totalPages)")
                 }
@@ -236,16 +255,31 @@ struct NotionView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Import", systemImage: "square.and.arrow.down")
                         .font(.headline)
+
+                    if viewModel.serverPendingImport > 0 {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("Server Preview", systemImage: "checklist")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                            Text("The backend now imports only the next deduped batch of up to \(viewModel.safeBatchLimit) pages. Server-side preview currently shows \(viewModel.serverPendingImport) effective pending pages, down from \(viewModel.serverPendingImportRaw) raw pending pages after collapsing \(viewModel.duplicatePagesCollapsed) exact duplicate pages.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(10)
+                        .background(.orange.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+
                     Button {
-                        Task { _ = await viewModel.startImport() }
+                        showBulkImportConfirmation = true
                     } label: {
-                        Label(viewModel.isImporting ? "Import Running" : "Import Unmatched Pages", systemImage: viewModel.isImporting ? "hourglass" : "arrow.down.circle")
+                        Label(viewModel.isImporting ? "Safe Batch Running" : "Import Next Safe Batch", systemImage: viewModel.isImporting ? "hourglass" : "square.and.arrow.down.on.square")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isImporting)
+                    .disabled(viewModel.isImporting || viewModel.serverPendingImport == 0)
 
-                    Text("The backend currently imports unmatched pages in batch. If you only have one unmatched entry, this effectively behaves like a one-item sync.")
+                    Text("Loaded here: \(viewModel.recordings.count) of \(viewModel.totalRecordings) pages. Effective server backlog: \(viewModel.serverPendingImport). Safe batch size: up to \(viewModel.safeBatchLimit) pages per run.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -293,6 +327,10 @@ struct NotionView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal)
 
+                if let review = viewModel.matchReview {
+                    notionReviewSection(review)
+                }
+
                 if !xray.notionEvents.isEmpty {
                     notionLiveFeedSection
                 }
@@ -332,6 +370,13 @@ struct NotionView: View {
                                         .lineLimit(2)
                                 }
 
+                                if !rec.isImportedToChronos {
+                                    Text(rec.pageId)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.tertiary)
+                                        .textSelection(.enabled)
+                                }
+
                                 HStack(spacing: 10) {
                                     if let category = rec.category {
                                         CategoryPill(category: category)
@@ -347,6 +392,18 @@ struct NotionView: View {
                                             Label("Open", systemImage: "arrow.up.right.square")
                                                 .font(.caption)
                                         }
+                                    }
+
+                                    if !rec.isImportedToChronos {
+                                        Button {
+                                            overrideRecordingId = viewModel.manualOverrides[rec.pageId] ?? ""
+                                            selectedOverrideTarget = rec
+                                        } label: {
+                                            Label("Override", systemImage: "slider.horizontal.3")
+                                                .font(.caption)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
                                     }
                                 }
                             }
@@ -505,11 +562,14 @@ struct NotionView: View {
 
     private func pageStatusBadge(for recording: NotionRecording) -> some View {
         Group {
-            if recording.isImportedToChronos {
+            if viewModel.manualOverrides[recording.pageId] != nil {
+                Label("Override", systemImage: "slider.horizontal.3")
+                    .foregroundStyle(.blue)
+            } else if recording.isImportedToChronos {
                 Label("Imported", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             } else {
-                Label("Ready", systemImage: "arrow.down.circle")
+                Label("Unmatched", systemImage: "exclamationmark.circle")
                     .foregroundStyle(.orange)
             }
         }
@@ -524,8 +584,237 @@ struct NotionView: View {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 statCard(title: "Workspace", value: viewModel.workspaceName ?? "Unknown")
                 statCard(title: "Database", value: status.databaseTitle ?? "Selected")
-                statCard(title: "Ready To Import", value: "\(viewModel.unmatchedCount)", color: .orange)
+                statCard(title: "Server Pending", value: "\(viewModel.serverPendingImport)", color: .orange)
+                statCard(title: "Matched", value: "\(viewModel.matchedToExistingCount)", color: .green)
+                statCard(title: "Raw Pending", value: "\(viewModel.serverPendingImportRaw)")
+                statCard(title: "Dupes Collapsed", value: "\(viewModel.duplicatePagesCollapsed)", color: .blue)
+                statCard(title: "Overrides", value: "\(viewModel.manualOverrideCount)")
                 statCard(title: "Import State", value: viewModel.isImporting ? "Running" : "Idle", color: viewModel.isImporting ? .green : .primary)
+            }
+        }
+    }
+
+    private var safeBatchWarningMessage: String {
+        "The backend preview currently shows \(viewModel.serverPendingImport) effective pending Notion pages from \(viewModel.serverPendingImportRaw) raw pending pages. \(viewModel.duplicatePagesCollapsed) exact duplicate pages are already collapsed server-side. Starting this action imports only the next deduped batch of up to \(viewModel.safeBatchLimit) pages."
+    }
+
+    private func notionReviewSection(_ review: NotionMatchReview) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Review", systemImage: "magnifyingglass.circle")
+                .font(.headline)
+
+            Text("The backend has exhausted high-confidence automatic matching. Use this section to review any suggested aliases, see duplicate transcript groups, and apply manual overrides when you know the correct Chronos recording ID.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                statCard(title: "Pending", value: "\(review.pendingTotal)", color: .orange)
+                statCard(title: "Aliases", value: "\(review.highConfidenceTranscriptAliasCount)")
+                statCard(title: "Duplicate Groups", value: "\(review.duplicateGroupCount)")
+                statCard(title: "Overrides", value: "\(review.manualOverrideCount)", color: .blue)
+            }
+
+            if !review.highConfidenceTranscriptAliases.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Suggested Matches")
+                        .font(.subheadline.weight(.semibold))
+
+                    ForEach(Array(review.highConfidenceTranscriptAliases.prefix(5))) { alias in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(alias.title)
+                                .font(.subheadline.weight(.semibold))
+                            if let date = alias.date {
+                                Text(date)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("Candidate: \(alias.candidateTitle)")
+                                .font(.caption)
+                            Text(alias.candidateRecordingId)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+
+                            HStack {
+                                Text("Similarity \(alias.transcriptSimilarity.formatted(.number.precision(.fractionLength(2))))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Use Candidate") {
+                                    Task {
+                                        _ = await viewModel.applyManualOverride(
+                                            pageId: alias.pageId,
+                                            recordingId: alias.candidateRecordingId
+                                        )
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                        .padding(10)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+
+            if !review.duplicateGroups.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Duplicate Transcript Groups")
+                        .font(.subheadline.weight(.semibold))
+
+                    ForEach(Array(review.duplicateGroups.prefix(5))) { group in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("\(group.groupSize) exact duplicates")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                                Spacer()
+                                Button("Group Override") {
+                                    groupOverrideRecordingId = ""
+                                    selectedDuplicateGroup = group
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+
+                            ForEach(group.pages.prefix(3)) { page in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(page.title)
+                                        .font(.caption.weight(.medium))
+                                    HStack {
+                                        if let date = page.date {
+                                            Text(date)
+                                        }
+                                        Text(page.pageId)
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+    }
+
+    private func manualOverrideSheet(for recording: NotionRecording) -> some View {
+        NavigationStack {
+            Form {
+                Section("Notion Page") {
+                    Text(recording.title)
+                    Text(recording.pageId)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    if let date = recording.date ?? recording.createdTime {
+                        Text(date)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Chronos Recording") {
+                    TextField("Recording ID", text: $overrideRecordingId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if let currentOverride = viewModel.manualOverrides[recording.pageId], !currentOverride.isEmpty {
+                        Text("Current override: \(currentOverride)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .navigationTitle("Manual Override")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        selectedOverrideTarget = nil
+                    }
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Clear") {
+                        Task {
+                            if await viewModel.clearManualOverride(pageId: recording.pageId) {
+                                selectedOverrideTarget = nil
+                            }
+                        }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        Task {
+                            if await viewModel.applyManualOverride(pageId: recording.pageId, recordingId: overrideRecordingId) {
+                                selectedOverrideTarget = nil
+                            }
+                        }
+                    }
+                    .disabled(overrideRecordingId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func duplicateGroupOverrideSheet(for group: NotionDuplicateGroup) -> some View {
+        NavigationStack {
+            Form {
+                Section("Chronos Recording") {
+                    TextField("Recording ID", text: $groupOverrideRecordingId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Text("Apply the same Chronos recording ID to every Notion page in this exact duplicate transcript group.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Pages") {
+                    ForEach(group.pages) { page in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(page.title)
+                            Text(page.pageId)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                            if let date = page.date {
+                                Text(date)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Group Override")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        selectedDuplicateGroup = nil
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        Task {
+                            if await viewModel.applyBulkOverride(
+                                pageIds: group.pages.map(\.pageId),
+                                recordingId: groupOverrideRecordingId
+                            ) {
+                                selectedDuplicateGroup = nil
+                            }
+                        }
+                    }
+                    .disabled(groupOverrideRecordingId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }
     }
