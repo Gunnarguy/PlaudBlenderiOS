@@ -98,8 +98,13 @@ final class APIClient: Sendable {
 
     // MARK: - HTTP Methods
 
-    func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
-        let request = try buildRequest(path: versionedPath(path), method: "GET", query: query)
+    func get<T: Decodable>(_ path: String, query: [String: String] = [:], timeoutInterval: TimeInterval? = nil) async throws -> T {
+        let request = try buildRequest(
+            path: versionedPath(path),
+            method: "GET",
+            query: query,
+            timeoutInterval: timeoutInterval
+        )
         return try await executeWithRetry(request)
     }
 
@@ -203,7 +208,8 @@ final class APIClient: Sendable {
     private func buildRequest(
         path: String,
         method: String,
-        query: [String: String] = [:]
+        query: [String: String] = [:],
+        timeoutInterval: TimeInterval? = nil
     ) throws -> URLRequest {
         guard var components = URLComponents(
             url: baseURL.appendingPathComponent(path),
@@ -223,6 +229,9 @@ final class APIClient: Sendable {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        if let timeoutInterval {
+            request.timeoutInterval = timeoutInterval
+        }
 
         if let token = authManager.getToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

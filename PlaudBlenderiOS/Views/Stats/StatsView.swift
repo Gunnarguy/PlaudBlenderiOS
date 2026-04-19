@@ -4,6 +4,8 @@ import Charts
 struct StatsView: View {
     let viewModel: StatsViewModel
 
+    @State private var showPricing = false
+
     var body: some View {
         NavigationStack {
             Group {
@@ -12,336 +14,501 @@ struct StatsView: View {
                 } else if let stats = viewModel.stats {
                     statsContent(stats)
                 } else {
-                    EmptyStateView(
-                        icon: "chart.bar",
-                        title: "No Stats Available",
-                        actionTitle: "Refresh",
-                        action: { Task { await viewModel.refresh() } }
-                    )
+                    statsUnavailableState
                 }
             }
             .navigationTitle("Stats")
             .refreshable { await viewModel.refresh() }
-            .task { await viewModel.loadAll() }
+            .task { await viewModel.bootstrapIfNeeded() }
         }
     }
 
-    // MARK: - Main Content
+    private var statsUnavailableState: some View {
+        VStack(spacing: 16) {
+            if let error = viewModel.error {
+                ErrorBanner(message: error)
+                    .padding(.horizontal)
+            }
+
+            EmptyStateView(
+                icon: "chart.bar",
+                title: "Stats Are Taking Too Long",
+                actionTitle: "Refresh",
+                action: { Task { await viewModel.refresh() } }
+            )
+        }
+    }
 
     private func statsContent(_ stats: Stats) -> some View {
-        ScrollView {
+        let hourly = stats.effectiveEventsByHour
+
+        return ScrollView {
             VStack(spacing: 16) {
+                if viewModel.hasStaleData {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(.orange)
+                        Text("Showing last known stats while the server catches up.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(.orange.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal)
+                }
+
                 if let error = viewModel.error {
                     ErrorBanner(message: error)
+                        .padding(.horizontal)
                 }
 
-                // Primary stat cards (2x2)
-                primaryStatCards(stats)
+                overviewSection(stats)
+                densitySection(stats)
+                insightRadarSection(stats)
 
-                // Derived stat cards (2x2)
-                derivedStatCards(stats)
+                if !stats.recentDayStats.isEmpty {
+                    recentDaysSection(stats.recentDayStats)
+                }
 
-                // Sentiment distribution bar
+                if let workflowStats = viewModel.workflowStats {
+                    workflowSection(workflowStats)
+                }
+
                 if let dist = stats.sentimentDistribution, !dist.isEmpty {
-                    sentimentDistributionBar(dist)
+                    sentimentDistributionSection(dist)
                 }
 
-                // Category distribution chart
                 if !stats.categories.isEmpty {
-                    categoryChart(stats.categories)
+                    categoriesSection(stats)
                 }
 
-                // Hour × Category heatmap
                 if stats.categoriesByHour != nil {
-                    heatmapChart(stats)
+                    heatmapSection(stats)
                 }
 
-                // Activity by hour
-                let hourly = stats.effectiveEventsByHour
                 if !hourly.isEmpty {
-                    activityByHourChart(hourly)
+                    activityByHourSection(hourly)
                 }
 
-                // Day of week
                 if let dow = stats.eventsByDayOfWeek, !dow.isEmpty {
-                    dayOfWeekChart(dow)
+                    dayOfWeekSection(dow)
                 }
 
-                // Top keywords
                 if let keywords = stats.topKeywords, !keywords.isEmpty {
-                    keywordsCloud(keywords)
+                    keywordsSection(keywords)
                 }
 
-                // Insights
-                insightsSection(stats)
-
-                // Plaud Cloud stats
                 if let cloud = stats.plaudCloudStats, !cloud.isEmpty {
-                    plaudCloudCard(cloud)
+                    plaudCloudSection(cloud)
                 }
 
-                // Per-model cost breakdown
-                if let cost = viewModel.sessionCost {
-                    modelCostBreakdown(cost)
+                if viewModel.sessionCost != nil || viewModel.costHistory != nil {
+                    costOverviewSection
                 }
 
-                // Session costs summary
-                if let cost = viewModel.sessionCost {
-                    costCard(cost)
-                }
-
-                // Cost history chart
                 if let history = viewModel.costHistory, let byDay = history.byDay, !byDay.isEmpty {
-                    costHistoryChart(byDay, totalCost: history.totalCostUsd, totalCalls: history.totalCalls, days: history.days)
+                    costHistorySection(byDay, totalCost: history.totalCostUsd, totalCalls: history.totalCalls, days: history.days)
                 }
 
-                // Model pricing table
+                if let cost = viewModel.sessionCost {
+                    modelCostSection(cost)
+                }
+
                 if let pricing = viewModel.modelPricing {
                     modelPricingSection(pricing)
                 }
 
-                // Topics link
-                NavigationLink {
-                    TopicsGridView(viewModel: TopicsViewModel(api: viewModel.api))
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "tag")
-                            .font(.title3)
-                            .frame(width: 32)
-                            .foregroundStyle(Color.accentPrimary)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Topics")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                            Text("Clusters and recurring themes across your recordings.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding()
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal)
+                topicsLink
             }
             .padding(.vertical)
         }
     }
 
-    // MARK: - Primary Stat Cards
-
-    private func primaryStatCards(_ stats: Stats) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            StatCard(title: "Recordings", value: "\(stats.totalRecordings)", icon: "waveform")
-            StatCard(title: "Events", value: "\(stats.totalEvents)", icon: "list.bullet")
-            StatCard(title: "Days", value: "\(stats.totalDays)", icon: "calendar")
-            StatCard(title: "Hours", value: String(format: "%.1f", stats.totalDurationHours), icon: "clock")
+    private func overviewSection(_ stats: Stats) -> some View {
+        StatsSectionCard(
+            title: "Overview",
+            subtitle: "The broad shape of your recordings and events.",
+            systemImage: "chart.bar.xaxis"
+        ) {
+            LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                MetricTile(title: "Recordings", value: "\(stats.totalRecordings)", footnote: densityFootnote(stats.averageRecordingsPerDay, suffix: "/day"), icon: "waveform", tint: .accentPrimary)
+                MetricTile(title: "Events", value: "\(stats.totalEvents)", footnote: densityFootnote(stats.averageEventsPerDay, suffix: "/day"), icon: "list.bullet", tint: .accentGreen)
+                MetricTile(title: "Tracked Days", value: "\(stats.totalDays)", footnote: "Active span", icon: "calendar", tint: .accentOrange)
+                MetricTile(title: "Recorded Hours", value: String(format: "%.1f", stats.totalDurationHours), footnote: densityFootnote(stats.averageHoursPerDay, suffix: "h/day"), icon: "clock", tint: .accentPurple)
+                MetricTile(title: "Avg Events/Rec", value: String(format: "%.1f", stats.effectiveAvgEvents), footnote: "Per recording", icon: "number", tint: .accentCyan)
+                MetricTile(title: "Avg Duration", value: String(format: "%.0fm", stats.effectiveAvgDuration), footnote: "Per recording", icon: "timer", tint: .accentPink)
+            }
         }
-        .padding(.horizontal)
     }
 
-    // MARK: - Derived Stat Cards
+    private func densitySection(_ stats: Stats) -> some View {
+        StatsSectionCard(
+            title: "Density And Coverage",
+            subtitle: "How concentrated the data is across categories, sentiment, and completion.",
+            systemImage: "scope"
+        ) {
+            LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                if let dominant = stats.dominantCategory {
+                    MetricTile(
+                        title: "Dominant Category",
+                        value: dominant.name.replacingOccurrences(of: "_", with: " ").capitalized,
+                        footnote: "\(percentString(dominant.share)) of categorized events",
+                        icon: "square.grid.2x2",
+                        tint: Color.forCategory(dominant.name)
+                    )
+                }
 
-    private func derivedStatCards(_ stats: Stats) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            StatCard(title: "Avg Events/Rec", value: String(format: "%.1f", stats.effectiveAvgEvents), icon: "number")
-            StatCard(title: "Avg Duration", value: String(format: "%.0fm", stats.effectiveAvgDuration), icon: "timer")
-            if let sentiment = stats.sentimentAvg {
-                StatCard(
-                    title: "Sentiment",
-                    value: String(format: "%+.2f", sentiment),
-                    icon: sentiment > 0.3 ? "face.smiling" : sentiment < -0.3 ? "face.dashed.fill" : "face.dashed"
+                MetricTile(
+                    title: "Categories",
+                    value: "\(stats.categoryDiversity)",
+                    footnote: "Distinct active categories",
+                    icon: "square.stack.3d.up",
+                    tint: .accentPrimary
                 )
-            }
-            if let rate = stats.pipelineCompletionRate {
-                StatCard(title: "Pipeline", value: String(format: "%.0f%%", rate * 100), icon: "checkmark.circle")
+
+                if let sentiment = stats.sentimentAvg {
+                    MetricTile(
+                        title: "Avg Sentiment",
+                        value: String(format: "%+.2f", sentiment),
+                        footnote: sentiment > 0.2 ? "Mostly positive" : sentiment < -0.2 ? "Skews negative" : "Mostly neutral",
+                        icon: sentiment > 0.2 ? "face.smiling" : sentiment < -0.2 ? "face.dashed.fill" : "face.dashed",
+                        tint: sentiment > 0.2 ? .accentGreen : sentiment < -0.2 ? .accentRed : .accentOrange
+                    )
+                }
+
+                if let rate = stats.pipelineCompletionRate {
+                    MetricTile(
+                        title: "Pipeline Completion",
+                        value: percentString(rate),
+                        footnote: rate >= 0.9 ? "Healthy" : "Needs cleanup",
+                        icon: "checkmark.circle",
+                        tint: rate >= 0.9 ? .accentGreen : .accentOrange
+                    )
+                }
+
+                if let positiveShare = stats.positiveShare {
+                    MetricTile(
+                        title: "Positive Share",
+                        value: percentString(positiveShare),
+                        footnote: "Positive sentiment events",
+                        icon: "sun.max",
+                        tint: .accentGreen
+                    )
+                }
+
+                if let negativeShare = stats.negativeShare {
+                    MetricTile(
+                        title: "Negative Share",
+                        value: percentString(negativeShare),
+                        footnote: "Negative sentiment events",
+                        icon: "cloud.rain",
+                        tint: .accentRed
+                    )
+                }
             }
         }
-        .padding(.horizontal)
     }
 
-    // MARK: - Sentiment Distribution Bar
+    private func insightRadarSection(_ stats: Stats) -> some View {
+        let radar = radarInsights(stats)
+        guard !radar.isEmpty else { return AnyView(EmptyView()) }
 
-    private func sentimentDistributionBar(_ dist: [String: Int]) -> some View {
-        let pos = dist["positive"] ?? 0
-        let neu = dist["neutral"] ?? 0
-        let neg = dist["negative"] ?? 0
-        let total = max(pos + neu + neg, 1)
+        return AnyView(
+            StatsSectionCard(
+                title: "Pattern Radar",
+                subtitle: "The most interesting high-signal takeaways from the current aggregate.",
+                systemImage: "sparkles"
+            ) {
+                LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                    ForEach(radar) { insight in
+                        InsightMetricTile(insight: insight)
+                    }
+                }
+            }
+        )
+    }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Sentiment Distribution")
-                .font(.headline)
+    private func recentDaysSection(_ recentDays: [RecentDayStat]) -> some View {
+        let recent = Array(recentDays.suffix(10))
 
+        return StatsSectionCard(
+            title: "Recent Days",
+            subtitle: "A compact look at the latest day-level activity the API exposed.",
+            systemImage: "calendar.badge.clock"
+        ) {
+            if !recent.isEmpty {
+                Chart(recent) { day in
+                    BarMark(
+                        x: .value("Day", day.displayLabel),
+                        y: .value("Events", day.events)
+                    )
+                    .foregroundStyle(Color.accentPrimary.gradient)
+                }
+                .chartYAxis(.hidden)
+                .frame(height: 120)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(recent.reversed()) { day in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(day.displayLabel)
+                                .font(.caption.weight(.semibold))
+                            Text("\(day.events) events")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            if let recordings = day.recordings {
+                                Text("\(recordings) rec")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let hours = day.durationHours {
+                                Text(String(format: "%.1fh", hours))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let summary = day.summary, !summary.isEmpty {
+                                Text(summary)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        .frame(width: 110, alignment: .leading)
+                        .padding(10)
+                        .background(Color.accentPrimary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+        }
+    }
+
+    private func workflowSection(_ workflow: WorkflowStats) -> some View {
+        StatsSectionCard(
+            title: "Plaud Workflow Coverage",
+            subtitle: "Workflow backlog, completion, and AI summary coverage from the dedicated workflow endpoint.",
+            systemImage: "brain"
+        ) {
+            LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                MetricTile(title: "Recent Recordings", value: "\(workflow.recentRecordings ?? 0)", footnote: "Workflow window", icon: "waveform.path.ecg", tint: .accentPrimary)
+                MetricTile(title: "AI Summaries", value: "\(workflow.withAiSummary ?? 0)", footnote: "Already enriched", icon: "sparkles.rectangle.stack", tint: .accentGreen)
+                MetricTile(title: "Ready", value: "\(workflow.readyForEnrichment ?? 0)", footnote: "Ready for enrichment", icon: "wand.and.stars", tint: .accentOrange)
+                MetricTile(title: "Pending", value: "\(workflow.workflowPending ?? 0)", footnote: "Queued or running", icon: "hourglass", tint: .accentPurple)
+                MetricTile(title: "Failed", value: "\(workflow.workflowFailed ?? 0)", footnote: "Need retry", icon: "exclamationmark.triangle", tint: .accentRed)
+                MetricTile(title: "Succeeded", value: "\(workflow.workflowSuccess ?? 0)", footnote: workflow.lastSubmittedAt ?? "Completed workflows", icon: "checkmark.seal", tint: .accentGreen)
+            }
+        }
+    }
+
+    private func sentimentDistributionSection(_ dist: [String: Int]) -> some View {
+        let segments = [
+            SentimentSegment(label: "positive", count: dist["positive"] ?? 0, color: .accentGreen),
+            SentimentSegment(label: "neutral", count: dist["neutral"] ?? 0, color: .secondary),
+            SentimentSegment(label: "negative", count: dist["negative"] ?? 0, color: .accentRed)
+        ]
+        let total = max(segments.map(\.count).reduce(0, +), 1)
+
+        return StatsSectionCard(
+            title: "Sentiment Split",
+            subtitle: "A quick breakdown of positive, neutral, and negative event tone.",
+            systemImage: "face.smiling.inverse"
+        ) {
             GeometryReader { geo in
                 HStack(spacing: 0) {
-                    if pos > 0 {
-                        Rectangle()
-                            .fill(Color.accentGreen)
-                            .frame(width: geo.size.width * CGFloat(pos) / CGFloat(total))
-                    }
-                    if neu > 0 {
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.4))
-                            .frame(width: geo.size.width * CGFloat(neu) / CGFloat(total))
-                    }
-                    if neg > 0 {
-                        Rectangle()
-                            .fill(Color.accentRed)
-                            .frame(width: geo.size.width * CGFloat(neg) / CGFloat(total))
+                    ForEach(segments) { segment in
+                        if segment.count > 0 {
+                            Rectangle()
+                                .fill(segment.color)
+                                .frame(width: geo.size.width * CGFloat(segment.count) / CGFloat(total))
+                        }
                     }
                 }
                 .clipShape(Capsule())
             }
             .frame(height: 20)
 
-            HStack(spacing: 16) {
-                Label("\(pos) positive", systemImage: "circle.fill")
-                    .font(.caption2).foregroundStyle(Color.accentGreen)
-                Label("\(neu) neutral", systemImage: "circle.fill")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Label("\(neg) negative", systemImage: "circle.fill")
-                    .font(.caption2).foregroundStyle(Color.accentRed)
-            }
-        }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
-    }
-
-    // MARK: - Category Chart
-
-    private func categoryChart(_ categories: [String: Int]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Categories")
-                .font(.headline)
-                .padding(.horizontal)
-
-            Chart {
-                ForEach(categories.sorted(by: { $0.value > $1.value }), id: \.key) { cat, count in
-                    BarMark(
-                        x: .value("Count", count),
-                        y: .value("Category", cat.capitalized)
+            LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                ForEach(segments) { segment in
+                    MetricTile(
+                        title: segment.label.capitalized,
+                        value: "\(segment.count)",
+                        footnote: percentString(Double(segment.count) / Double(total)),
+                        icon: "circle.fill",
+                        tint: segment.color
                     )
-                    .foregroundStyle(Color.forCategory(cat))
-                    .annotation(position: .trailing) {
-                        Text("\(count)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
-            .chartXAxis(.hidden)
-            .frame(height: CGFloat(categories.count * 36))
-            .padding(.horizontal)
         }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
     }
 
-    // MARK: - Heatmap (Hour × Category)
+    private func categoriesSection(_ stats: Stats) -> some View {
+        let topCategories = stats.categories.sorted { $0.value > $1.value }.prefix(8)
+        let total = max(stats.categories.values.reduce(0, +), 1)
 
-    private func heatmapChart(_ stats: Stats) -> some View {
+        return StatsSectionCard(
+            title: "Categories",
+            subtitle: "Where your event volume is concentrated.",
+            systemImage: "square.grid.2x2"
+        ) {
+            categoryChart(stats.categories)
+
+            VStack(spacing: 10) {
+                ForEach(Array(topCategories), id: \.key) { category in
+                    CategoryShareRow(
+                        name: category.key,
+                        count: category.value,
+                        share: Double(category.value) / Double(total),
+                        color: Color.forCategory(category.key)
+                    )
+                }
+            }
+        }
+    }
+
+    private func heatmapSection(_ stats: Stats) -> some View {
         let data = stats.heatmapData
         guard !data.isEmpty else { return AnyView(EmptyView()) }
 
-        // Get top 6 categories by total count
-        var catTotals: [String: Int] = [:]
-        for d in data { catTotals[d.category, default: 0] += d.count }
-        let topCats = catTotals.sorted { $0.value > $1.value }.prefix(6).map(\.key)
-        let filtered = data.filter { topCats.contains($0.category) }
-        let maxCount = filtered.map(\.count).max() ?? 1
+        var categoryTotals: [String: Int] = [:]
+        for point in data {
+            categoryTotals[point.category, default: 0] += point.count
+        }
+        let categories = categoryTotals.sorted { $0.value > $1.value }.prefix(6).map(\.key)
+        let filtered = data.filter { categories.contains($0.category) }
+        let maxCount = max(filtered.map(\.count).max() ?? 1, 1)
+        let hourTotals = Dictionary(grouping: filtered, by: \.hour).mapValues { $0.map(\.count).reduce(0, +) }
+        let busiestHour = hourTotals.max(by: { $0.value < $1.value })
 
         return AnyView(
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Activity Heatmap")
-                    .font(.headline)
-                Text("Hour of day × Category")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            StatsSectionCard(
+                title: "Activity Heat Map",
+                subtitle: busiestHour.map { "Hour \($0.key) is the densest block with \($0.value) events." } ?? "Hour of day by category.",
+                systemImage: "square.grid.3x3.fill"
+            ) {
+                HStack(spacing: 10) {
+                    Text("Quiet")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
 
-                // Header (hours)
+                    HStack(spacing: 4) {
+                        ForEach(0..<4, id: \.self) { index in
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(Color.accentPrimary.opacity(0.15 + Double(index) * 0.2))
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+
+                    Text("Dense")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Text("Top 6 categories")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 ScrollView(.horizontal, showsIndicators: false) {
-                    VStack(spacing: 2) {
-                        // Hour labels
-                        HStack(spacing: 2) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 4) {
                             Text("")
-                                .frame(width: 70, alignment: .leading)
-                            ForEach(0..<24, id: \.self) { h in
-                                Text(h % 6 == 0 ? "\(h)" : "")
-                                    .font(.system(size: 8))
-                                    .frame(width: 14, alignment: .center)
+                                .frame(width: 84, alignment: .leading)
+                            ForEach(0..<24, id: \.self) { hour in
+                                Text(hourLabelShort(hour))
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundStyle(hour % 3 == 0 ? .secondary : .tertiary)
+                                    .frame(width: 16)
+                            }
+                            Text("Sum")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+
+                        ForEach(categories, id: \.self) { category in
+                            let total = categoryTotals[category] ?? 0
+                            HStack(spacing: 4) {
+                                Text(category.replacingOccurrences(of: "_", with: " ").capitalized)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                                    .frame(width: 84, alignment: .leading)
+
+                                ForEach(0..<24, id: \.self) { hour in
+                                    let count = filtered.first(where: { $0.hour == hour && $0.category == category })?.count ?? 0
+                                    let intensity = Double(count) / Double(maxCount)
+
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(Color.forCategory(category).opacity(count == 0 ? 0.05 : 0.18 + intensity * 0.82))
+                                        .overlay {
+                                            if count > 0 && intensity > 0.65 {
+                                                Text("\(count)")
+                                                    .font(.system(size: 6, weight: .bold))
+                                                    .foregroundStyle(.white)
+                                            }
+                                        }
+                                        .frame(width: 16, height: 16)
+                                }
+
+                                Text("\(total)")
+                                    .font(.caption2.monospacedDigit())
                                     .foregroundStyle(.secondary)
+                                    .frame(width: 34, alignment: .trailing)
                             }
                         }
 
-                        // Category rows
-                        ForEach(topCats, id: \.self) { cat in
-                            HStack(spacing: 2) {
-                                Text(cat.capitalized)
-                                    .font(.caption2)
-                                    .lineLimit(1)
-                                    .frame(width: 70, alignment: .leading)
+                        Divider()
 
-                                ForEach(0..<24, id: \.self) { h in
-                                    let count = filtered.first(where: { $0.hour == h && $0.category == cat })?.count ?? 0
-                                    let intensity = maxCount > 0 ? Double(count) / Double(maxCount) : 0
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color.forCategory(cat).opacity(count > 0 ? 0.15 + intensity * 0.85 : 0.05))
-                                        .frame(width: 14, height: 14)
-                                        .overlay {
-                                            if count > 0 {
-                                                Text("\(count)")
-                                                    .font(.system(size: 6))
-                                                    .foregroundStyle(.white.opacity(intensity > 0.4 ? 1 : 0))
-                                            }
-                                        }
-                                }
+                        HStack(spacing: 4) {
+                            Text("Total")
+                                .font(.caption2.weight(.semibold))
+                                .frame(width: 84, alignment: .leading)
+
+                            ForEach(0..<24, id: \.self) { hour in
+                                let count = hourTotals[hour] ?? 0
+                                let intensity = Double(count) / Double(maxCount)
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color.accentPrimary.opacity(count == 0 ? 0.05 : 0.18 + intensity * 0.82))
+                                    .frame(width: 16, height: 16)
                             }
+
+                            Text("\(hourTotals.values.reduce(0, +))")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
                         }
                     }
                 }
             }
-            .padding()
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal)
         )
     }
 
-    // MARK: - Activity by Hour
-
-    private func activityByHourChart(_ hourly: [Int: Int]) -> some View {
+    private func activityByHourSection(_ hourly: [Int: Int]) -> some View {
         let maxVal = hourly.values.max() ?? 1
-        let entries = (0..<24).map { h in
-            (hour: h, count: hourly[h] ?? 0)
+        let entries = (0..<24).map { hour in
+            HourEntry(hour: hour, count: hourly[hour] ?? 0)
         }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Activity by Hour")
-                .font(.headline)
-
-            Chart(entries, id: \.hour) { entry in
+        return StatsSectionCard(
+            title: "Activity By Hour",
+            subtitle: "When events cluster across the day.",
+            systemImage: "clock.badge"
+        ) {
+            Chart(entries) { entry in
                 BarMark(
                     x: .value("Hour", entry.hour),
                     y: .value("Events", entry.count)
                 )
-                .foregroundStyle(
-                    Color.accentPrimary.opacity(entry.count > 0 ? 0.3 + 0.7 * Double(entry.count) / Double(maxVal) : 0.1)
-                )
+                .foregroundStyle(Color.accentPrimary.opacity(entry.count > 0 ? 0.3 + 0.7 * Double(entry.count) / Double(maxVal) : 0.08))
             }
             .chartXAxis {
                 AxisMarks(values: .stride(by: 3)) { value in
                     AxisValueLabel {
-                        if let h = value.as(Int.self) {
-                            Text(h == 0 ? "12a" : h < 12 ? "\(h)a" : h == 12 ? "12p" : "\(h-12)p")
+                        if let hour = value.as(Int.self) {
+                            Text(hourLabelShort(hour))
                                 .font(.caption2)
                         }
                     }
@@ -349,38 +516,41 @@ struct StatsView: View {
             }
             .chartYAxis {
                 AxisMarks { value in
-                    AxisGridLine()
-                    AxisValueLabel().font(.caption2)
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    AxisValueLabel {
+                        if let count = value.as(Int.self), count > 0 {
+                            Text("\(count)")
+                                .font(.caption2)
+                        }
+                    }
                 }
             }
-            .frame(height: 140)
+            .frame(height: 160)
         }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
     }
 
-    // MARK: - Day of Week
-
-    private func dayOfWeekChart(_ dow: [String: Int]) -> some View {
+    private func dayOfWeekSection(_ dow: [String: Int]) -> some View {
         let order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         let short = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        let entries = order.enumerated().compactMap { i, day -> (label: String, count: Int, index: Int)? in
-            let count = dow[day] ?? dow[day.lowercased()] ?? dow[short[i]] ?? dow[short[i].lowercased()] ?? 0
-            return (short[i], count, i)
+        let entries = order.enumerated().map { index, day in
+            DayEntry(
+                label: short[index],
+                count: dow[day] ?? dow[day.lowercased()] ?? dow[short[index]] ?? dow[short[index].lowercased()] ?? 0,
+                index: index
+            )
         }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Activity by Day")
-                .font(.headline)
-
-            Chart(entries, id: \.index) { entry in
+        return StatsSectionCard(
+            title: "Activity By Day",
+            subtitle: "Weekly rhythm across the event set.",
+            systemImage: "calendar.day.timeline.leading"
+        ) {
+            Chart(entries) { entry in
                 BarMark(
                     x: .value("Day", entry.label),
                     y: .value("Events", entry.count)
                 )
-                .foregroundStyle(Color.accentPurple.opacity(0.7))
+                .foregroundStyle(Color.accentPurple.opacity(0.75))
                 .annotation(position: .top) {
                     if entry.count > 0 {
                         Text("\(entry.count)")
@@ -389,332 +559,259 @@ struct StatsView: View {
                     }
                 }
             }
-            .chartXAxis {
-                AxisMarks { _ in AxisValueLabel().font(.caption2) }
-            }
             .chartYAxis(.hidden)
-            .frame(height: 140)
+            .frame(height: 150)
         }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
     }
 
-    // MARK: - Keywords Cloud
-
-    private func keywordsCloud(_ keywords: [[String: JSONValue]]) -> some View {
+    private func keywordsSection(_ keywords: [[String: JSONValue]]) -> some View {
         let parsed: [(word: String, count: Int)] = keywords.compactMap { dict in
             guard let word = dict["keyword"]?.stringValue,
                   let count = dict["count"]?.intValue else { return nil }
             return (word, count)
-        }.prefix(20).map { $0 }
+        }
+        .prefix(24)
+        .map { $0 }
 
-        let maxCount = parsed.map(\.count).max() ?? 1
+        let maxCount = max(parsed.map(\.count).max() ?? 1, 1)
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Top Keywords")
-                .font(.headline)
-
+        return StatsSectionCard(
+            title: "Top Keywords",
+            subtitle: "Repeated terms that cut across your recordings.",
+            systemImage: "textformat.abc"
+        ) {
             FlowLayout(spacing: 6) {
                 ForEach(parsed, id: \.word) { item in
-                    let scale = 0.7 + 0.6 * Double(item.count) / Double(maxCount)
-                    Text(item.word)
-                        .font(.system(size: 13 * scale, weight: scale > 1.0 ? .semibold : .regular))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.accentPrimary.opacity(0.08 + 0.12 * Double(item.count) / Double(maxCount)))
-                        .clipShape(Capsule())
-                        .foregroundStyle(Color.accentPrimary)
-                }
-            }
-        }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
-    }
-
-    // MARK: - Insights
-
-    private func insightsSection(_ stats: Stats) -> some View {
-        let hourly = stats.effectiveEventsByHour
-        let peakHour = hourly.max(by: { $0.value < $1.value })
-
-        let hasInsight = stats.mostProductiveDay != nil || peakHour != nil || stats.longestRecordingMin != nil
-
-        return Group {
-            if hasInsight {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Insights")
-                        .font(.headline)
-
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        if let day = stats.mostProductiveDay {
-                            InsightCard(icon: "star.fill", color: .accentYellow, label: "Best Day", value: day)
-                        }
-                        if let peak = peakHour {
-                            let h = peak.key
-                            let label = h == 0 ? "12 AM" : h < 12 ? "\(h) AM" : h == 12 ? "12 PM" : "\(h-12) PM"
-                            InsightCard(icon: "bolt.fill", color: .accentOrange, label: "Peak Hour", value: label)
-                        }
-                        if let longest = stats.longestRecordingMin {
-                            InsightCard(icon: "record.circle", color: .accentRed, label: "Longest Rec", value: String(format: "%.0fm", longest))
-                        }
+                    let scale = 0.75 + 0.55 * Double(item.count) / Double(maxCount)
+                    VStack(spacing: 2) {
+                        Text(item.word)
+                            .font(.system(size: 13 * scale, weight: scale > 1.0 ? .semibold : .regular))
+                        Text("\(item.count)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(Color.accentPrimary.opacity(0.08 + 0.14 * Double(item.count) / Double(maxCount)))
+                    .clipShape(Capsule())
+                    .foregroundStyle(Color.accentPrimary)
                 }
-                .padding()
-                .background(.regularMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal)
             }
         }
     }
 
-    // MARK: - Plaud Cloud Stats
-
-    private func plaudCloudCard(_ cloud: [String: JSONValue]) -> some View {
+    private func plaudCloudSection(_ cloud: [String: JSONValue]) -> some View {
         let count = cloud["total_count"]?.intValue ?? 0
         let hours = cloud["total_duration_hours"]?.doubleValue ?? 0
         let avgMin = cloud["avg_duration_minutes"]?.doubleValue ?? 0
         let earliest = cloud["date_range"]?.objectValue?["earliest"]?.stringValue
         let latest = cloud["date_range"]?.objectValue?["latest"]?.stringValue
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Label("Plaud Cloud", systemImage: "cloud.fill")
-                .font(.headline)
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                VStack {
-                    Text("\(count)").font(.title3).fontWeight(.bold).monospacedDigit()
-                    Text("Recordings").font(.caption2).foregroundStyle(.secondary)
-                }
-                VStack {
-                    Text(String(format: "%.1f", hours)).font(.title3).fontWeight(.bold).monospacedDigit()
-                    Text("Hours").font(.caption2).foregroundStyle(.secondary)
-                }
-                VStack {
-                    Text(String(format: "%.0fm", avgMin)).font(.title3).fontWeight(.bold).monospacedDigit()
-                    Text("Avg Duration").font(.caption2).foregroundStyle(.secondary)
-                }
+        return StatsSectionCard(
+            title: "Plaud Cloud Coverage",
+            subtitle: "What the cloud-side recording set looks like.",
+            systemImage: "cloud.fill"
+        ) {
+            LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                MetricTile(title: "Cloud Recordings", value: "\(count)", footnote: "Remote library", icon: "cloud", tint: .accentPrimary)
+                MetricTile(title: "Cloud Hours", value: String(format: "%.1f", hours), footnote: "Total duration", icon: "clock.arrow.circlepath", tint: .accentCyan)
+                MetricTile(title: "Avg Cloud Duration", value: String(format: "%.0fm", avgMin), footnote: "Per cloud recording", icon: "timer", tint: .accentOrange)
+                MetricTile(title: "Cloud Share", value: statsCloudShare(count), footnote: "Vs local recordings", icon: "externaldrive.badge.icloud", tint: .accentPurple)
             }
 
-            if let e = earliest, let l = latest {
-                Text("\(e) — \(l)")
-                    .font(.caption2)
+            if let earliest, let latest {
+                Text("\(earliest) – \(latest)")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
-    }
-
-    // MARK: - Per-Model Cost Breakdown
-
-    private func modelCostBreakdown(_ cost: SessionCost) -> some View {
-        let models: [(name: String, calls: Int, cost: Double)] = cost.byModel.compactMap { key, val in
-            guard let obj = val.objectValue,
-                  let calls = obj["calls"]?.intValue,
-                  let c = obj["cost_usd"]?.doubleValue else { return nil }
-            return (key, calls, c)
-        }.sorted { $0.cost > $1.cost }
-
-        return Group {
-            if !models.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Cost by Model", systemImage: "cpu")
-                        .font(.headline)
-
-                    ForEach(models, id: \.name) { model in
-                        HStack {
-                            Text(model.name)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            Text("\(model.calls) calls")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                            Text(String(format: "$%.4f", model.cost))
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .monospacedDigit()
-                                .frame(width: 70, alignment: .trailing)
-                        }
-                        if model.name != models.last?.name {
-                            Divider()
-                        }
-                    }
-                }
-                .padding()
-                .background(.regularMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal)
             }
         }
     }
 
-    // MARK: - Cost Card
+    private var costOverviewSection: some View {
+        StatsSectionCard(
+            title: "Cost Overview",
+            subtitle: "Costs, token volume, and daily burn compressed into cleaner summary tiles.",
+            systemImage: "dollarsign.circle"
+        ) {
+            LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                if let cost = viewModel.sessionCost {
+                    MetricTile(title: "Total Cost", value: String(format: "$%.4f", cost.totalCostUsd), footnote: "Current session", icon: "dollarsign.circle", tint: .accentGreen)
+                    MetricTile(title: "API Calls", value: "\(cost.totalCalls)", footnote: String(format: "%.0fm session", cost.sessionMinutes), icon: "arrow.left.arrow.right.circle", tint: .accentPrimary)
+                    MetricTile(title: "Input Tokens", value: formatTokens(cost.totalInputTokens), footnote: "Prompt volume", icon: "arrow.down.circle", tint: .accentOrange)
+                    MetricTile(title: "Output Tokens", value: formatTokens(cost.totalOutputTokens), footnote: "Response volume", icon: "arrow.up.circle", tint: .accentPurple)
+                }
 
-    private func costCard(_ cost: SessionCost) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Session Costs", systemImage: "dollarsign.circle")
-                .font(.headline)
-            HStack(spacing: 20) {
-                VStack {
-                    Text(String(format: "$%.4f", cost.totalCostUsd))
-                        .font(.title3).fontWeight(.bold).monospacedDigit()
-                    Text("Total").font(.caption2).foregroundStyle(.secondary)
-                }
-                VStack {
-                    Text("\(cost.totalCalls)")
-                        .font(.title3).fontWeight(.bold).monospacedDigit()
-                    Text("API Calls").font(.caption2).foregroundStyle(.secondary)
-                }
-                VStack {
-                    Text(String(format: "%.0fm", cost.sessionMinutes))
-                        .font(.title3).fontWeight(.bold).monospacedDigit()
-                    Text("Duration").font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-
-            if cost.totalInputTokens > 0 || cost.totalOutputTokens > 0 {
-                Divider()
-                HStack(spacing: 20) {
-                    VStack {
-                        Text(formatTokens(cost.totalInputTokens))
-                            .font(.caption).fontWeight(.medium).monospacedDigit()
-                        Text("Input Tokens").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    VStack {
-                        Text(formatTokens(cost.totalOutputTokens))
-                            .font(.caption).fontWeight(.medium).monospacedDigit()
-                        Text("Output Tokens").font(.caption2).foregroundStyle(.secondary)
-                    }
+                if let history = viewModel.costHistory {
+                    let avg = history.days > 0 ? history.totalCostUsd / Double(history.days) : 0
+                    MetricTile(title: "Avg Daily Cost", value: String(format: "$%.4f", avg), footnote: "\(history.days)-day window", icon: "chart.line.uptrend.xyaxis", tint: .accentCyan)
+                    MetricTile(title: "Total Calls Window", value: "\(history.totalCalls)", footnote: "Cost history window", icon: "calendar.badge.clock", tint: .accentPink)
                 }
             }
         }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
     }
 
-    // MARK: - Cost History Chart
-
-    private func costHistoryChart(_ byDay: [[String: JSONValue]], totalCost: Double, totalCalls: Int, days: Int) -> some View {
+    private func costHistorySection(_ byDay: [[String: JSONValue]], totalCost: Double, totalCalls: Int, days: Int) -> some View {
         let entries = byDay.compactMap { dict -> CostDayEntry? in
             guard let dateStr = dict["date"]?.stringValue,
                   let cost = dict["cost"]?.doubleValue ?? dict["cost_usd"]?.doubleValue ?? dict["total_cost_usd"]?.doubleValue else {
                 return nil
             }
             let calls = dict["calls"]?.intValue ?? dict["total_calls"]?.intValue ?? 0
-            return CostDayEntry(date: dateStr, cost: cost, calls: calls)
+            return CostDayEntry(index: 0, date: dateStr, cost: cost, calls: calls)
         }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("Cost History (\(days)d)", systemImage: "chart.line.uptrend.xyaxis")
-                    .font(.headline)
-                Spacer()
-                Text(String(format: "$%.4f total", totalCost))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+        let indexed = entries.enumerated().map { index, entry in
+            CostDayEntry(index: index, date: entry.date, cost: entry.cost, calls: entry.calls)
+        }
+        let avgCost = indexed.isEmpty ? 0 : indexed.map(\.cost).reduce(0, +) / Double(indexed.count)
+        let peak = indexed.max(by: { $0.cost < $1.cost })
+        let width = max(CGFloat(indexed.count) * 24, 320)
+        let stride = max(indexed.count / 4, 1)
+
+        return StatsSectionCard(
+            title: "Cost History",
+            subtitle: "A wider, calmer chart with the average line and the peak day called out.",
+            systemImage: "chart.line.uptrend.xyaxis.circle"
+        ) {
+            LazyVGrid(columns: statsGridColumns, spacing: 10) {
+                MetricTile(title: "Window Total", value: String(format: "$%.4f", totalCost), footnote: "\(days)-day total", icon: "sum", tint: .accentGreen)
+                MetricTile(title: "Avg / Day", value: String(format: "$%.4f", avgCost), footnote: "Daily burn", icon: "function", tint: .accentPrimary)
+                if let peak {
+                    MetricTile(title: "Peak Day", value: String(format: "$%.4f", peak.cost), footnote: peak.displayLabel, icon: "arrow.up.right.circle", tint: .accentRed)
+                }
+                MetricTile(title: "Calls", value: "\(totalCalls)", footnote: "Window total", icon: "arrow.up.arrow.down.circle", tint: .accentPurple)
             }
 
-            if !entries.isEmpty {
-                Chart(entries) { entry in
-                    AreaMark(
-                        x: .value("Date", entry.date),
+            ScrollView(.horizontal, showsIndicators: false) {
+                Chart(indexed) { entry in
+                    BarMark(
+                        x: .value("Index", entry.index),
                         y: .value("Cost", entry.cost)
                     )
-                    .foregroundStyle(Color.accentPrimary.opacity(0.15))
+                    .foregroundStyle(Color.accentPrimary.gradient)
 
-                    LineMark(
-                        x: .value("Date", entry.date),
-                        y: .value("Cost", entry.cost)
-                    )
-                    .foregroundStyle(Color.accentPrimary)
-
-                    PointMark(
-                        x: .value("Date", entry.date),
-                        y: .value("Cost", entry.cost)
-                    )
-                    .foregroundStyle(Color.accentPrimary)
-                    .symbolSize(entry.cost > 0 ? 20 : 0)
+                    RuleMark(y: .value("Average", avgCost))
+                        .foregroundStyle(Color.accentOrange.opacity(0.8))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 }
                 .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 5)) { _ in
-                        AxisValueLabel()
-                            .font(.caption2)
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks { value in
-                        AxisGridLine()
+                    AxisMarks(values: indexed.compactMap { entry in
+                        entry.index == 0 || entry.index == indexed.count - 1 || entry.index % stride == 0 ? entry.index : nil
+                    }) { value in
                         AxisValueLabel {
-                            if let v = value.as(Double.self) {
-                                Text(String(format: "$%.3f", v))
+                            if let index = value.as(Int.self), indexed.indices.contains(index) {
+                                Text(indexed[index].displayLabel)
                                     .font(.caption2)
                             }
                         }
                     }
                 }
-                .frame(height: 160)
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                        AxisValueLabel {
+                            if let raw = value.as(Double.self) {
+                                Text(String(format: "$%.3f", raw))
+                                    .font(.caption2)
+                            }
+                        }
+                    }
+                }
+                .frame(width: width, height: 190)
             }
 
-            HStack(spacing: 16) {
-                Label("\(totalCalls) calls", systemImage: "arrow.up.arrow.down")
-                    .font(.caption2)
+            if let peak {
+                Text("Peak spend landed on \(peak.displayLabel) with \(peak.calls) calls.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                if let maxEntry = entries.max(by: { $0.cost < $1.cost }) {
-                    Label("Peak: \(maxEntry.date) ($\(String(format: "%.4f", maxEntry.cost)))", systemImage: "arrow.up")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func modelCostSection(_ cost: SessionCost) -> some View {
+        let models: [(name: String, calls: Int, cost: Double)] = cost.byModel.compactMap { key, value in
+            guard let object = value.objectValue,
+                  let calls = object["calls"]?.intValue,
+                  let modelCost = object["cost_usd"]?.doubleValue else {
+                return nil
+            }
+            return (key, calls, modelCost)
+        }
+        .sorted { $0.cost > $1.cost }
+
+        let maxCost = max(models.map(\.cost).max() ?? 1, 1)
+
+        return StatsSectionCard(
+            title: "Cost By Model",
+            subtitle: "Which models are actually consuming budget.",
+            systemImage: "cpu"
+        ) {
+            ForEach(models, id: \.name) { model in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(model.name)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text("\(model.calls) calls")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        Text(String(format: "$%.4f", model.cost))
+                            .font(.caption.weight(.medium))
+                            .monospacedDigit()
+                    }
+
+                    GeometryReader { geo in
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.12))
+                            .overlay(alignment: .leading) {
+                                Capsule()
+                                    .fill(Color.accentPrimary.gradient)
+                                    .frame(width: geo.size.width * CGFloat(model.cost / maxCost))
+                            }
+                    }
+                    .frame(height: 8)
+                }
+
+                if model.name != models.last?.name {
+                    Divider()
                 }
             }
         }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
     }
 
-    // MARK: - Model Pricing Table
-
-    @State private var showPricing = false
-
     private func modelPricingSection(_ pricing: ModelPricing) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        StatsSectionCard(
+            title: "Model Pricing",
+            subtitle: "Reference pricing from the server-side cost tracker.",
+            systemImage: "tag.circle"
+        ) {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showPricing.toggle() }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showPricing.toggle()
+                }
             } label: {
                 HStack {
-                    Label("Model Pricing", systemImage: "tag.circle")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                    Text(showPricing ? "Hide Pricing Table" : "Show Pricing Table")
+                        .font(.subheadline.weight(.semibold))
                     Spacer()
                     Image(systemName: showPricing ? "chevron.up" : "chevron.down")
-                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
 
             if showPricing {
-                ForEach(pricing.models.indices, id: \.self) { i in
-                    let model = pricing.models[i]
+                ForEach(pricing.models.indices, id: \.self) { index in
+                    let model = pricing.models[index]
                     let name = model["model"]?.stringValue ?? model["name"]?.stringValue ?? "Unknown"
-                    let inputCost = model["input_cost_per_1k"]?.doubleValue ?? model["input_cost"]?.doubleValue
-                    let outputCost = model["output_cost_per_1k"]?.doubleValue ?? model["output_cost"]?.doubleValue
                     let provider = model["provider"]?.stringValue
+                    let input = model["input_cost_per_1k"]?.doubleValue ?? model["input_cost"]?.doubleValue
+                    let output = model["output_cost_per_1k"]?.doubleValue ?? model["output_cost"]?.doubleValue
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(name)
                                 .font(.caption.weight(.medium))
@@ -730,15 +827,16 @@ struct StatsView: View {
                                     .clipShape(Capsule())
                             }
                         }
+
                         HStack(spacing: 16) {
-                            if let ic = inputCost {
-                                Text("In: $\(String(format: "%.4f", ic))/1K")
+                            if let input {
+                                Text("In: $\(String(format: "%.4f", input))/1K")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
                             }
-                            if let oc = outputCost {
-                                Text("Out: $\(String(format: "%.4f", oc))/1K")
+                            if let output {
+                                Text("Out: $\(String(format: "%.4f", output))/1K")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
@@ -746,85 +844,316 @@ struct StatsView: View {
                         }
                     }
                     .padding(.vertical, 4)
-                    if i < pricing.models.count - 1 {
+
+                    if index < pricing.models.count - 1 {
                         Divider()
                     }
                 }
             }
         }
-        .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var topicsLink: some View {
+        NavigationLink {
+            TopicsGridView(viewModel: TopicsViewModel(api: viewModel.api))
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "tag")
+                    .font(.title3)
+                    .frame(width: 32)
+                    .foregroundStyle(Color.accentPrimary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Topics")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text("Clusters and recurring themes across your recordings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding()
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
         .padding(.horizontal)
     }
 
-    // MARK: - Helpers
+    private func categoryChart(_ categories: [String: Int]) -> some View {
+        let sorted = categories.sorted { $0.value > $1.value }
+
+        return Chart {
+            ForEach(sorted, id: \.key) { category, count in
+                BarMark(
+                    x: .value("Count", count),
+                    y: .value("Category", category.replacingOccurrences(of: "_", with: " ").capitalized)
+                )
+                .foregroundStyle(Color.forCategory(category))
+                .annotation(position: .trailing) {
+                    Text("\(count)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .chartXAxis(.hidden)
+        .frame(height: CGFloat(sorted.count * 34))
+    }
+
+    private func radarInsights(_ stats: Stats) -> [RadarInsight] {
+        var insights: [RadarInsight] = []
+
+        if let bestDay = stats.mostProductiveDay {
+            insights.append(RadarInsight(title: "Best Day", value: bestDay, footnote: "Highest aggregate day", icon: "star.fill", tint: .accentYellow))
+        }
+
+        if let peakHour = stats.effectivePeakHour {
+            insights.append(RadarInsight(title: "Peak Hour", value: hourLabelLong(peakHour), footnote: "Most active hour block", icon: "bolt.fill", tint: .accentOrange))
+        }
+
+        if let longest = stats.longestRecordingMin {
+            insights.append(RadarInsight(title: "Longest Recording", value: String(format: "%.0fm", longest), footnote: "Single longest capture", icon: "record.circle", tint: .accentRed))
+        }
+
+        if let dominant = stats.dominantCategory {
+            insights.append(RadarInsight(title: "Dominant Category", value: dominant.name.replacingOccurrences(of: "_", with: " ").capitalized, footnote: percentString(dominant.share), icon: "square.stack", tint: Color.forCategory(dominant.name)))
+        }
+
+        insights.append(RadarInsight(title: "Rec / Day", value: String(format: "%.1f", stats.averageRecordingsPerDay), footnote: "Average recordings per day", icon: "calendar.badge.plus", tint: .accentPrimary))
+        insights.append(RadarInsight(title: "Events / Day", value: String(format: "%.1f", stats.averageEventsPerDay), footnote: "Average events per day", icon: "chart.bar.doc.horizontal", tint: .accentGreen))
+
+        if let positiveShare = stats.positiveShare {
+            insights.append(RadarInsight(title: "Positive Tone", value: percentString(positiveShare), footnote: "Positive event share", icon: "sun.max.fill", tint: .accentGreen))
+        }
+
+        if let negativeShare = stats.negativeShare {
+            insights.append(RadarInsight(title: "Negative Tone", value: percentString(negativeShare), footnote: "Negative event share", icon: "cloud.bolt.fill", tint: .accentRed))
+        }
+
+        return Array(insights.prefix(8))
+    }
+
+    private func statsCloudShare(_ count: Int) -> String {
+        guard let stats = viewModel.stats, stats.totalRecordings > 0 else {
+            return "—"
+        }
+        return percentString(Double(count) / Double(stats.totalRecordings))
+    }
+
+    private func densityFootnote(_ value: Double, suffix: String) -> String {
+        String(format: "%.1f%@", value, suffix)
+    }
+
+    private func percentString(_ value: Double) -> String {
+        String(format: "%.0f%%", value * 100)
+    }
+
+    private func hourLabelShort(_ hour: Int) -> String {
+        switch hour {
+        case 0: return "12a"
+        case 12: return "12p"
+        case 1..<12: return "\(hour)a"
+        default: return "\(hour - 12)p"
+        }
+    }
+
+    private func hourLabelLong(_ hour: Int) -> String {
+        switch hour {
+        case 0: return "12 AM"
+        case 12: return "12 PM"
+        case 1..<12: return "\(hour) AM"
+        default: return "\(hour - 12) PM"
+        }
+    }
 
     private func formatTokens(_ count: Int) -> String {
         if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
         if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000) }
         return "\(count)"
     }
+
+    private var statsGridColumns: [GridItem] {
+        [GridItem(.flexible()), GridItem(.flexible())]
+    }
 }
 
-// MARK: - Stat Card
-
-struct StatCard: View {
+private struct StatsSectionCard<Content: View>: View {
     let title: String
-    let value: String
-    let icon: String
+    let subtitle: String?
+    let systemImage: String
+    let content: Content
+
+    init(title: String, subtitle: String? = nil, systemImage: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.systemImage = systemImage
+        self.content = content()
+    }
 
     var body: some View {
-        VStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(Color.accentPrimary)
-            Text(value)
-                .font(.title2)
-                .fontWeight(.bold)
-                .monospacedDigit()
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.headline)
+                    .foregroundStyle(Color.accentPrimary)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.headline)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            content
         }
-        .frame(maxWidth: .infinity)
         .padding()
         .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title): \(value)")
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
     }
 }
 
-// MARK: - Insight Card
-
-struct InsightCard: View {
-    let icon: String
-    let color: Color
-    let label: String
+private struct MetricTile: View {
+    let title: String
     let value: String
+    let footnote: String?
+    let icon: String
+    let tint: Color
 
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(color)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundStyle(tint)
+                Spacer()
+            }
+
             Text(value)
-                .font(.caption)
-                .fontWeight(.semibold)
+                .font(.title3.weight(.bold))
+                .monospacedDigit()
                 .lineLimit(1)
-            Text(label)
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
+                .minimumScaleFactor(0.7)
+
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+
+            if let footnote {
+                Text(footnote)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(8)
-        .background(color.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 
-// MARK: - Flow Layout (for keyword cloud)
+private struct InsightMetricTile: View {
+    let insight: RadarInsight
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: insight.icon)
+                .foregroundStyle(insight.tint)
+
+            Text(insight.value)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+
+            Text(insight.title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+
+            Text(insight.footnote)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(insight.tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct CategoryShareRow: View {
+    let name: String
+    let count: Int
+    let share: Double
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(name.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .font(.caption.weight(.medium))
+                Spacer()
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                Text(String(format: "%.0f%%", share * 100))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, alignment: .trailing)
+            }
+
+            GeometryReader { geo in
+                Capsule()
+                    .fill(Color.secondary.opacity(0.12))
+                    .overlay(alignment: .leading) {
+                        Capsule()
+                            .fill(color)
+                            .frame(width: geo.size.width * CGFloat(share))
+                    }
+            }
+            .frame(height: 8)
+        }
+    }
+}
+
+private struct RadarInsight: Identifiable {
+    let id = UUID()
+    let title: String
+    let value: String
+    let footnote: String
+    let icon: String
+    let tint: Color
+}
+
+private struct SentimentSegment: Identifiable {
+    let id = UUID()
+    let label: String
+    let count: Int
+    let color: Color
+}
+
+private struct HourEntry: Identifiable {
+    let hour: Int
+    let count: Int
+    var id: Int { hour }
+}
+
+private struct DayEntry: Identifiable {
+    let label: String
+    let count: Int
+    let index: Int
+    var id: Int { index }
+}
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
@@ -864,11 +1193,26 @@ struct FlowLayout: Layout {
     }
 }
 
-// MARK: - Cost Day Entry
-
 private struct CostDayEntry: Identifiable {
+    let index: Int
     let date: String
     let cost: Double
     let calls: Int
-    var id: String { date }
+
+    var id: Int { index }
+
+    var displayLabel: String {
+        if let parsed = date.iso8601Date {
+            return parsed.shortDateString
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        if let parsed = formatter.date(from: date) {
+            return parsed.shortDateString
+        }
+
+        return date
+    }
 }
