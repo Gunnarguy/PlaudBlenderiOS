@@ -43,6 +43,8 @@ final class SettingsViewModel: NSObject {
 
     private let api: APIClient
     private let authManager: AuthManager
+    @ObservationIgnored private var plaudStatusFailureCount = 0
+    @ObservationIgnored private var webAuthCoordinator: PlaudWebAuthCoordinator?
 
     init(api: APIClient, authManager: AuthManager) {
         self.api = api
@@ -82,41 +84,90 @@ final class SettingsViewModel: NSObject {
 
     func loadPlaudStatus() async {
         do {
-            plaudStatus = try await api.get("/api/auth/plaud/status")
+            let status: TokenStatus = try await api.get("/api/auth/plaud/status")
+            plaudStatus = status
+            plaudStatusFailureCount = 0
+        } catch is CancellationError {
+            return
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return
         } catch {
-            plaudStatus = nil
+            plaudStatusFailureCount += 1
+            // Require 2 consecutive hard failures before clearing status — avoids
+            // a single timeout or cancelled request marking Plaud as disconnected.
+            if plaudStatusFailureCount >= 2 {
+                plaudStatus = nil
+            }
         }
     }
 
-    func startPlaudOAuthFlow(anchor _: ASPresentationAnchor) async {
+    func startPlaudOAuthFlow(anchor: ASPresentationAnchor) async {
         isAuthorizingPlaud = true
         error = nil
-        defer { isAuthorizingPlaud = false }
+        defer {
+            isAuthorizingPlaud = false
+            webAuthCoordinator = nil
+        }
 
         do {
+            // Always request with mobile=true so the server uses the deep-link callback
+            // rather than a desktop redirect_uri.
             let response: AuthURLResponse = try await api.get(
                 "/api/auth/plaud/authorize",
-                query: ["return_to": try plaudServerReturnURL().absoluteString]
+                query: ["mobile": "true"]
             )
             guard let authURL = URL(string: response.authUrl) else {
                 error = "Invalid Plaud authorization URL"
                 return
             }
-            if let redirectURL = plaudRedirectURL(from: authURL),
-               isLocalhostCallback(redirectURL) {
-                error = """
-                Plaud auth is misconfigured on the server. It is still using a desktop localhost callback: \(redirectURL.absoluteString).
-                Update the Pi backend to use the public API callback flow.
-                """
+
+            // Present OAuth in-app via ASWebAuthenticationSession.
+            // The session calls back to plaudblender://plaud-callback
+            let callbackURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+                let coordinator = PlaudWebAuthCoordinator(
+                    url: authURL,
+                    callbackScheme: "plaudblender",
+                    anchor: anchor
+                ) { callbackURL, sessionError in
+                    if let sessionError {
+                        continuation.resume(throwing: sessionError)
+                    } else if let url = callbackURL {
+                        continuation.resume(returning: url)
+                    } else {
+                        continuation.resume(throwing: APIError.invalidResponse)
+                    }
+                }
+                webAuthCoordinator = coordinator
+                coordinator.session.start()
+            }
+
+            // Parse plaudblender://plaud-callback?success=true or ?error=...
+            let queryItems = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if let errorMsg = queryItems.first(where: { $0.name == "error" })?.value, !errorMsg.isEmpty {
+                error = "Plaud authorization failed: \(errorMsg)"
                 return
             }
-            let opened = await openInSafari(authURL)
-            if !opened {
-                error = "Could not open Plaud authorization in Safari"
+            guard queryItems.first(where: { $0.name == "success" })?.value == "true" else {
+                error = "Plaud authorization was not confirmed. Please try again."
                 return
             }
-            error = "Finish Plaud sign-in in Safari. The Raspberry Pi will store the Plaud token and this screen will refresh when you return."
-            await waitForPlaudAuthorization()
+
+            // Poll /api/auth/plaud/status for up to 10 seconds (20 × 500 ms)
+            for _ in 0..<20 {
+                try await Task.sleep(for: .milliseconds(500))
+                await loadPlaudStatus()
+                if plaudStatus?.isAuthenticated == true {
+                    error = nil
+                    await loadSystemStatus()
+                    return
+                }
+            }
+            error = "Plaud authorization completed but status confirmation timed out. Try refreshing Settings."
+
+        } catch let authError as ASWebAuthenticationSessionError where authError.code == .canceledLogin {
+            error = nil  // user cancelled — not an error
+        } catch is CancellationError {
+            error = nil
         } catch {
             self.error = error.localizedDescription
         }
@@ -227,50 +278,32 @@ final class SettingsViewModel: NSObject {
         await loadServerSettings()
     }
 
-    private func plaudRedirectURL(from authURL: URL) -> URL? {
-        guard let components = URLComponents(url: authURL, resolvingAgainstBaseURL: false),
-              let redirectValue = components.queryItems?.first(where: { $0.name == "redirect_uri" })?.value
-        else {
-            return nil
-        }
+}
 
-        return URL(string: redirectValue)
+// MARK: - ASWebAuthenticationSession coordinator
+// Keeps the session and presentation-context provider alive for the OAuth round-trip.
+private final class PlaudWebAuthCoordinator: NSObject, ASWebAuthenticationPresentationContextProviding {
+    let session: ASWebAuthenticationSession
+    private let anchor: ASPresentationAnchor
+
+    init(
+        url: URL,
+        callbackScheme: String,
+        anchor: ASPresentationAnchor,
+        completionHandler: @escaping ASWebAuthenticationSession.CompletionHandler
+    ) {
+        self.anchor = anchor
+        self.session = ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: callbackScheme,
+            completionHandler: completionHandler
+        )
+        super.init()
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = true
     }
 
-    private func isLocalhostCallback(_ url: URL) -> Bool {
-        guard let host = url.host?.lowercased() else { return false }
-        return host == "localhost" || host == "127.0.0.1"
-    }
-
-    private func plaudServerReturnURL() throws -> URL {
-        guard let base = URL(string: api.resolvedServerURL) else {
-            throw APIError.invalidURL(api.resolvedServerURL)
-        }
-        return base.appendingPathComponent("api/v1/auth/plaud/status")
-    }
-
-    private func waitForPlaudAuthorization() async {
-        for _ in 0..<45 {
-            do {
-                try await Task.sleep(for: .seconds(2))
-            } catch {
-                return
-            }
-
-            await loadPlaudStatus()
-            if plaudStatus?.isAuthenticated == true {
-                error = nil
-                await loadSystemStatus()
-                return
-            }
-        }
-    }
-
-    private func openInSafari(_ url: URL) async -> Bool {
-        await withCheckedContinuation { continuation in
-            UIApplication.shared.open(url, options: [:]) { opened in
-                continuation.resume(returning: opened)
-            }
-        }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        anchor
     }
 }

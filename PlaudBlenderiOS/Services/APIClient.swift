@@ -100,7 +100,7 @@ final class APIClient: Sendable {
 
     func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
         let request = try buildRequest(path: versionedPath(path), method: "GET", query: query)
-        return try await execute(request)
+        return try await executeWithRetry(request)
     }
 
     func post<T: Decodable, B: Encodable>(_ path: String, body: B) async throws -> T {
@@ -316,10 +316,34 @@ final class APIClient: Sendable {
                 errorMessage: error.localizedDescription
             )
             logger.error("🔴 NETWORK ERROR \(method) \(urlString) (\(elapsed)ms): \(error.localizedDescription, privacy: .public)")
-            isServerReachable = false
-            lastError = error.localizedDescription
+            // Treat cancellations as non-fatal — don't flip server reachability.
+            let isCancelled = (error as? URLError)?.code == .cancelled || error is CancellationError
+            if !isCancelled {
+                isServerReachable = false
+                lastError = error.localizedDescription
+            }
             throw error
         }
+    }
+
+    /// Retries the request on timeout up to 2 times with delays of 0.4 s and 1.0 s.
+    /// All other errors (HTTP, cancelled, decoding) are surfaced immediately.
+    private func executeWithRetry<T: Decodable>(_ request: URLRequest) async throws -> T {
+        let retryDelays: [TimeInterval] = [0.4, 1.0]
+        var lastError: Error?
+        for attempt in 0...(retryDelays.count) {
+            do {
+                return try await execute(request)
+            } catch let urlError as URLError where urlError.code == .timedOut && attempt < retryDelays.count {
+                lastError = urlError
+                let delay = retryDelays[attempt]
+                logger.warning("⏱ Timeout \(request.url?.path(percentEncoded: false) ?? "?", privacy: .public) — retry \(attempt + 1) in \(delay, format: .fixed(precision: 1))s")
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                throw error
+            }
+        }
+        throw lastError ?? APIError.invalidResponse
     }
 
     private func checkHealth(at serverURL: String) async -> Bool {

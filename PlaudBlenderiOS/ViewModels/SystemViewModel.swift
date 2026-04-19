@@ -437,9 +437,13 @@ final class SystemViewModel {
     private func loadSystemStatus() async {
         do {
             systemStatus = try await api.get("/api/status")
+        } catch is CancellationError {
+            return
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return
         } catch {
-            systemStatus = nil
-            if self.error == nil {
+            // Keep last successful systemStatus; only surface the error if we have nothing
+            if systemStatus == nil, self.error == nil {
                 self.error = error.localizedDescription
             }
         }

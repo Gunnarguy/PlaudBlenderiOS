@@ -84,6 +84,21 @@ struct SyncDashboardView: View {
 
     private var heroCard: some View {
         VStack(spacing: 12) {
+            // Stale data notice (transient refresh failure, last payload retained)
+            if viewModel.hasStaleData {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(.orange).font(.caption)
+                    Text("Showing last known data — refresh may be delayed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(8)
+                .background(.orange.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             // Error / message banner (inline, not a separate card)
             if let error = viewModel.error {
                 HStack(spacing: 8) {

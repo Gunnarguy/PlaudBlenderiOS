@@ -22,6 +22,7 @@ final class SyncViewModel {
     var isRunningStackAction = false
     var isUploadingCandidates = false
     var isCreatingBackup = false
+    var hasStaleData = false
     var error: String?
     var lastMessage: String?
     var lastUpdated: Date?
@@ -30,6 +31,7 @@ final class SyncViewModel {
 
     private let api: APIClient
     @ObservationIgnored private var monitorTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var stablePollCount = 0
     @ObservationIgnored private var lastMonitorSignature = ""
 
@@ -170,6 +172,7 @@ final class SyncViewModel {
             let status: PipelineStatus = try await api.get("/api/sync/status")
             pipelineStatus = status
             lastUpdated = Date()
+            hasStaleData = false
             updateRunningState(from: status)
         } catch is CancellationError {
             // Task was cancelled — do not surface as an error or kill monitoring
@@ -177,7 +180,12 @@ final class SyncViewModel {
         } catch let urlError as URLError where urlError.code == .cancelled {
             return
         } catch {
-            self.error = error.localizedDescription
+            // Keep last known pipelineStatus — mark as stale rather than hard-failing.
+            if pipelineStatus != nil {
+                hasStaleData = true
+            } else {
+                self.error = error.localizedDescription
+            }
             if showLoading {
                 isLoading = false
             }
@@ -193,8 +201,17 @@ final class SyncViewModel {
     func loadDbStats() async {
         do {
             dbStats = try await api.get("/api/sync/db-stats")
+            hasStaleData = false
+        } catch is CancellationError {
+            return
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            return
         } catch {
-            self.error = error.localizedDescription
+            if dbStats == nil {
+                self.error = error.localizedDescription
+            } else {
+                hasStaleData = true
+            }
         }
     }
 
@@ -441,11 +458,22 @@ final class SyncViewModel {
         await loadSyncFailures()
         await loadBackups()
         await loadSystemStatus()
+        // If all key data arrived successfully, clear any previous stale flag.
+        if pipelineStatus != nil && dbStats != nil {
+            hasStaleData = false
+        }
         isLoading = false
     }
 
     func refresh() async {
-        await loadAll()
+        // Cancel any older in-flight refresh; only the newest pull-to-refresh wins.
+        refreshTask?.cancel()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.loadAll()
+        }
+        refreshTask = task
+        await task.value
     }
 
     private func updateRunningState(from status: PipelineStatus) {
