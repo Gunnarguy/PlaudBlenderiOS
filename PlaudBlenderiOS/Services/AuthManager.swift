@@ -12,13 +12,17 @@ final class AuthManager: Sendable {
     private static let serverURLInfoPlistKey = "ChronosServerURL"
     private static let allowLoopbackLaunchArgument = "-PlaudBlenderAllowLoopbackServer"
 
+    /// Pi's Tailscale MagicDNS host for remote access when the iPhone is on the tailnet.
+    private static let piTailscaleMagicDNSURL = "http://gunzino.taildb93d4.ts.net:8000"
+    /// Pi's stable Tailscale IP fallback when MagicDNS is unavailable on the client.
+    private static let piTailscaleURL = "http://100.76.130.109:8000"
     /// Pi's known LAN IP for fast local access on home Wi-Fi.
     private static let piLanURL = "http://10.0.0.170:8000"
     /// Legacy Mac-local recovery URL from earlier debugging sessions.
     private static let legacyMacRecoveryHost = "10.0.0.175"
     /// Legacy temporary ngrok API URL from earlier debugging sessions.
     private static let legacyNgrokRecoveryHost = "3796-12-216-111-84.ngrok-free.app"
-    /// Reserved ngrok tunnel — canonical public backend URL for the Pi API.
+    /// Reserved ngrok tunnel — public fallback backend URL for the Pi API.
     private static let ngrokURL = "https://glairy-ona-irreplaceable.ngrok-free.dev"
 
     /// Default server URL — uses Info.plist value (ngrok), then falls back.
@@ -56,24 +60,28 @@ final class AuthManager: Sendable {
     func candidateServerURLs() -> [String] {
         var candidates: [String] = []
 
-        // 1. User-stored URL (from Settings)
-        if let storedURL = Self.preferredServerURL(from: KeychainService.load(key: Self.serverURLKey)) {
+        let storedURL = Self.preferredServerURL(from: KeychainService.load(key: Self.serverURLKey))
+        let configuredServerURL = Self.configuredServerURL
+
+        // 1. User-stored URL (from Settings) when it is a true override.
+        if let storedURL, !Self.isBuiltInServerURL(storedURL) {
             candidates.append(storedURL)
         }
 
-        // 2. Info.plist configured URL
-        if let configuredServerURL = Self.configuredServerURL {
+        // 2. Info.plist configured URL when it is not one of the built-in fallbacks.
+        if let configuredServerURL, !Self.isBuiltInServerURL(configuredServerURL) {
             candidates.append(configuredServerURL)
         }
 
-        // 3. Canonical public Pi API tunnel (works from anywhere)
+        // 3. Prefer direct Pi access over Tailscale before public tunneling.
+        candidates.append(Self.piTailscaleMagicDNSURL)
+        candidates.append(Self.piTailscaleURL)
+
+        // 4. Public Pi API tunnel (works when Tailscale is unavailable and ngrok quota permits)
         candidates.append(Self.ngrokURL)
 
-        // 4. Pi's LAN IP (faster when on home Wi-Fi)
+        // 5. Pi's LAN IP (faster when on home Wi-Fi)
         candidates.append(Self.piLanURL)
-
-        // 5. Optional Tailscale/private Pi URL, if the user set one manually.
-        // That value is stored in Keychain and appears as #1 above.
 
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }
@@ -147,5 +155,14 @@ final class AuthManager: Sendable {
         }
 
         return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    private static func isBuiltInServerURL(_ value: String) -> Bool {
+        [
+            piTailscaleMagicDNSURL,
+            piTailscaleURL,
+            ngrokURL,
+            piLanURL,
+        ].contains(value)
     }
 }

@@ -227,7 +227,10 @@ final class SyncViewModel {
         Haptics.impact()
         isRunning = true
         error = nil
-        lastMessage = "Starting \(stage.replacingOccurrences(of: "_", with: " ")) sync..."
+        let stageLabel = stage == "full"
+            ? "smart"
+            : stage.replacingOccurrences(of: "_", with: " ")
+        lastMessage = "Starting \(stageLabel) sync..."
         do {
             let body = PipelineRunRequest(stage: stage)
             let response: PipelineRunResponse = try await api.post("/api/sync/run", body: body)

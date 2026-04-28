@@ -15,7 +15,7 @@ enum PipelineStage: String, CaseIterable, Identifiable, Sendable {
 
     var displayName: String {
         switch self {
-        case .full: "Full Sync"
+        case .full: "Smart Sync"
         case .ingest: "Ingest"
         case .process: "Process"
         case .index: "Index"
@@ -37,7 +37,7 @@ enum PipelineStage: String, CaseIterable, Identifiable, Sendable {
 
     var description: String {
         switch self {
-        case .full: "Run the entire pipeline end-to-end"
+        case .full: "Fetch recent Plaud recordings, then process and index them"
         case .ingest: "Fetch new recordings from Plaud"
         case .process: "Run AI models on pending recordings"
         case .index: "Rebuild the Qdrant vector index"

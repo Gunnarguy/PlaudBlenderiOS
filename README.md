@@ -23,7 +23,7 @@ Native SwiftUI client for [Chronos](https://github.com/gunnarhostetler/PlaudBlen
 2. Open `PlaudBlenderiOS.xcodeproj` in Xcode
 3. Ensure the Pi-hosted Chronos backend is running and reachable
 4. Build and run on simulator or device
-5. In Settings, only override the server URL if you intentionally want a different Pi or private network endpoint. The app defaults to the canonical Pi public API from `Info.plist` and falls back to the Pi LAN IP.
+5. In Settings, only override the server URL if you intentionally want a different Pi or private network endpoint. The app prefers the Pi over Tailscale when available, then falls back to the public ngrok API, then the Pi LAN IP.
 
 ## Project Structure
 
