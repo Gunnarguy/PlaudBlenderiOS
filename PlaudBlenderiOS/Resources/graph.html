@@ -2,11 +2,13 @@
 <html>
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="utf-8" />
+    <!-- Load 3d-force-graph from a reliable CDN -->
     <script
-      src="cytoscape.min.js"
+      src="https://unpkg.com/3d-force-graph@1.73.0/dist/3d-force-graph.min.js"
       onerror="
         window.webkit.messageHandlers.graphError.postMessage(
-          'Failed to load bundled Cytoscape runtime.',
+          'Failed to load 3D Force Graph engine from CDN.',
         )
       "
     ></script>
@@ -20,31 +22,41 @@
         margin: 0;
         width: 100%;
         height: 100%;
-        background: transparent;
+        background: #090d16; /* Deep cosmic space black */
         overflow: hidden;
-        font-family:
-          -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
       }
 
-      #cy {
+      #graph-container {
         width: 100%;
         height: 100%;
+      }
+
+      /* Hover tooltip customization */
+      .graph-tooltip {
+        background: rgba(15, 23, 42, 0.9) !important;
+        border: 1px solid rgba(99, 102, 241, 0.4) !important;
+        border-radius: 8px !important;
+        color: #f8fafc !important;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif !important;
+        padding: 8px 12px !important;
+        font-size: 11px !important;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
       }
     </style>
   </head>
   <body>
-    <div id="cy"></div>
+    <div id="graph-container"></div>
     <script>
       (() => {
-        let cy = null;
-        const fallbackTopicColor = "#0f766e";
-        const fallbackCategoryColor = "#334155";
-        const laneWidth = 220;
-        const rowHeight = 132;
-        const startX = 120;
-        const categoryY = 110;
-        const topicY = 300;
-        const laneZoomFloor = 0.58;
+        let Graph = null;
+        let selectedNodeId = null;
+        let graphData = { nodes: [], links: [] };
+
+        // Highlight tracking sets
+        const highlightNodes = new Set();
+        const highlightLinks = new Set();
+        let hoveredNode = null;
 
         const post = (name, payload) => {
           try {
@@ -53,537 +65,236 @@
               handler.postMessage(payload);
             }
           } catch (_) {
-            // Ignore native bridge failures.
+            // Ignore native bridge failures
           }
         };
 
-        window.addEventListener(
-          "error",
-          (event) => {
-            if (event.target?.tagName === "SCRIPT") {
-              post("graphError", "Graph script failed to load.");
-            }
-          },
-          true,
-        );
+        window.addEventListener("error", (event) => {
+          if (event.target?.tagName === "SCRIPT") {
+            post("graphError", "Failed to load WebGL Graph scripts.");
+          }
+        }, true);
 
         window.onerror = (message, source, line, column) => {
-          post(
-            "graphError",
-            [message, source, line, column].filter(Boolean).join(" @ "),
-          );
+          post("graphError", [message, source, line, column].filter(Boolean).join(" @ "));
           return false;
         };
 
-        const shorten = (value, maxLength) => {
-          const text = String(value || "").trim();
-          if (text.length <= maxLength) {
-            return text;
-          }
-          return `${text.slice(0, maxLength - 1)}…`;
+        // Determine node size based on size parameter
+        const getNodeSizeVal = (sizeVal) => {
+          const val = Number(sizeVal || 15);
+          return Math.max(3.5, Math.min(15, val / 4.8));
         };
 
-        const normalizePayload = (payload) => {
-          const nodes = (payload?.nodes || []).map((node) => ({
-            data: { ...node },
-          }));
-          const edges = (payload?.edges || []).map((edge) => ({
-            data: { ...edge },
-          }));
-
-          const categoryNodes = nodes
-            .filter((node) => node.data.type === "category")
-            .sort((left, right) => {
-              const diff =
-                Number(right.data.count || 0) - Number(left.data.count || 0);
-              if (diff !== 0) {
-                return diff;
-              }
-              return String(left.data.label || "").localeCompare(
-                String(right.data.label || ""),
-              );
-            });
-
-          const categoryById = new Map(
-            categoryNodes.map((node) => [node.data.id, node.data]),
-          );
-          const categoryIndex = new Map(
-            categoryNodes.map((node, index) => [node.data.id, index]),
-          );
-          const associationsByTopic = new Map();
-
-          edges.forEach((edge) => {
-            const source = edge.data.source;
-            const target = edge.data.target;
-            const sourceIsCategory = categoryById.has(source);
-            const targetIsCategory = categoryById.has(target);
-
-            let topicId = null;
-            let categoryId = null;
-
-            if (sourceIsCategory && !targetIsCategory) {
-              categoryId = source;
-              topicId = target;
-            } else if (targetIsCategory && !sourceIsCategory) {
-              categoryId = target;
-              topicId = source;
-            } else if (targetIsCategory) {
-              categoryId = target;
-              topicId = source;
-            }
-
-            if (!topicId || !categoryId) {
+        window.updateGraph = (payload, layoutName, initialSelectedId) => {
+          try {
+            if (typeof ForceGraph3D === "undefined") {
+              post("graphError", "3D Force Graph engine is not loaded.");
               return;
             }
 
-            const bucket = associationsByTopic.get(topicId) || [];
-            bucket.push({ categoryId, weight: Number(edge.data.weight || 1) });
-            associationsByTopic.set(topicId, bucket);
-          });
+            selectedNodeId = initialSelectedId || null;
 
-          nodes.forEach((node) => {
-            const data = node.data;
-            const categoryTags = Array.isArray(data.categories)
-              ? data.categories
-              : String(data.categories || "")
-                  .split(",")
-                  .map((entry) => entry.trim())
-                  .filter(Boolean);
+            // 1. Transform Cytoscape format into 3D Force Graph format
+            const rawNodes = payload?.nodes || [];
+            const rawEdges = payload?.edges || [];
 
-            data.categories = categoryTags;
-            data.fullLabel = data.fullLabel || data.label || data.id;
-            data.metric = Number(data.mentionCount || data.count || 0);
-            data.color =
-              data.color ||
-              (data.type === "category"
-                ? fallbackCategoryColor
-                : fallbackTopicColor);
-            data.shape =
-              data.type === "category" ? "round-rectangle" : "ellipse";
-            data.displayLabel =
-              data.type === "category"
-                ? data.label
-                : data.metric >= 18
-                  ? shorten(data.label, 18)
-                  : "";
+            const nodes = rawNodes.map(node => {
+              const d = node.data || {};
+              // Determine category colors
+              const typeColors = {
+                category: d.color || "#8b5cf6",
+                topic: "#64748b",
+                person: "#3b82f6",
+                project: "#f59e0b",
+                organization: "#10b981",
+                location: "#f97316",
+                date: "#475569"
+              };
+              const color = d.color || typeColors[d.type] || "#4f46e5";
 
-            const associations = associationsByTopic.get(data.id) || [];
-            associations.sort((left, right) => right.weight - left.weight);
-
-            const primary = associations[0];
-            data.primaryCategoryId = primary?.categoryId || null;
-            data.primaryWeight = primary?.weight || 0;
-            data.laneIndex = primary
-              ? (categoryIndex.get(primary.categoryId) ?? categoryNodes.length)
-              : categoryNodes.length;
-
-            if (
-              data.type === "topic" &&
-              primary &&
-              (!data.color || data.color === fallbackTopicColor)
-            ) {
-              data.color =
-                categoryById.get(primary.categoryId)?.color ||
-                fallbackTopicColor;
-            }
-          });
-
-          return { nodes, edges, categoryNodes };
-        };
-
-        const presetPositions = (normalized) => {
-          const positions = {};
-          const topicsByLane = new Map();
-          const offsetPattern = [0, -34, 34, -68, 68];
-
-          normalized.categoryNodes.forEach((category, index) => {
-            positions[category.data.id] = {
-              x: startX + index * laneWidth,
-              y: categoryY,
-            };
-          });
-
-          normalized.nodes
-            .filter((node) => node.data.type === "topic")
-            .sort((left, right) => {
-              const laneDiff =
-                Number(left.data.laneIndex || 0) -
-                Number(right.data.laneIndex || 0);
-              if (laneDiff !== 0) {
-                return laneDiff;
-              }
-
-              const metricDiff =
-                Number(right.data.metric || 0) - Number(left.data.metric || 0);
-              if (metricDiff !== 0) {
-                return metricDiff;
-              }
-
-              return String(left.data.fullLabel || "").localeCompare(
-                String(right.data.fullLabel || ""),
-              );
-            })
-            .forEach((topic) => {
-              const lane = Number(topic.data.laneIndex || 0);
-              const bucket = topicsByLane.get(lane) || [];
-              bucket.push(topic);
-              topicsByLane.set(lane, bucket);
-            });
-
-          topicsByLane.forEach((topics, lane) => {
-            const baseX = startX + lane * laneWidth;
-            topics.forEach((topic, index) => {
-              const offset = offsetPattern[index % offsetPattern.length];
-              const row = Math.floor(index / offsetPattern.length);
-
-              positions[topic.data.id] = {
-                x: baseX + offset,
-                y: topicY + row * rowHeight,
+              return {
+                id: d.id,
+                label: d.label || d.id,
+                fullLabel: d.full_label || d.label || d.id,
+                type: d.type || "topic",
+                sizeVal: getNodeSizeVal(d.size),
+                color: color,
+                count: d.count || 0,
+                sentiment: d.sentiment || 0,
+                categories: d.categories || ""
               };
             });
-          });
 
-          return positions;
-        };
-
-        const laneFocusElements = (normalized, positions) => {
-          const focusThresholdY = topicY + rowHeight * 1.45;
-          const elements = cy.collection();
-
-          normalized.nodes.forEach((node) => {
-            const position = positions[node.data.id];
-            if (!position) {
-              return;
-            }
-
-            if (
-              node.data.type === "category" ||
-              position.y <= focusThresholdY
-            ) {
-              elements.merge(cy.getElementById(node.data.id));
-            }
-          });
-
-          return elements;
-        };
-
-        const applyLaneViewport = (normalized, positions) => {
-          const focusElements = laneFocusElements(normalized, positions);
-
-          if (focusElements.nonempty()) {
-            cy.fit(focusElements, 52);
-          }
-
-          const targetZoom = Math.min(Math.max(cy.zoom(), laneZoomFloor), 1.05);
-          const laneCount = Math.max(normalized.categoryNodes.length - 1, 0);
-          const focusX = startX + (laneCount * laneWidth) / 2;
-          const focusY = categoryY + rowHeight * 1.2;
-
-          if (targetZoom > cy.zoom()) {
-            cy.zoom({
-              level: targetZoom,
-              renderedPosition: {
-                x: cy.width() / 2,
-                y: cy.height() * 0.42,
-              },
+            // Map edges to links
+            const links = rawEdges.map(edge => {
+              const d = edge.data || {};
+              return {
+                id: d.id,
+                source: d.source,
+                target: d.target,
+                weight: Number(d.weight || 1)
+              };
             });
-          }
 
-          cy.pan({
-            x: cy.width() / 2 - focusX * cy.zoom(),
-            y: cy.height() * 0.2 - focusY * cy.zoom(),
-          });
-        };
+            graphData = { nodes, links };
 
-        const styles = () => [
-          {
-            selector: "node",
-            style: {
-              "background-color": "data(color)",
-              shape: "data(shape)",
-              width: "data(size)",
-              height: "data(size)",
-              "border-width": 2,
-              "border-color": "rgba(15, 23, 42, 0.14)",
-              label: "data(displayLabel)",
-              "font-family":
-                '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-              "font-size": 10,
-              "text-wrap": "wrap",
-              "text-max-width": 96,
-              "transition-property":
-                "opacity, background-color, line-color, width, height",
-              "transition-duration": "180ms",
-            },
-          },
-          {
-            selector: 'node[type = "category"]',
-            style: {
-              label: "data(label)",
-              color: "#f8fafc",
-              "font-size": 12,
-              "font-weight": 700,
-              "text-valign": "center",
-              "text-halign": "center",
-              "padding-left": 14,
-              "padding-right": 14,
-              "padding-top": 8,
-              "padding-bottom": 8,
-            },
-          },
-          {
-            selector: 'node[type = "topic"]',
-            style: {
-              color: "#0f172a",
-              "font-size": 9,
-              "text-valign": "bottom",
-              "text-margin-y": 10,
-              "text-background-color": "rgba(255, 255, 255, 0.92)",
-              "text-background-opacity": 1,
-              "text-background-padding": 3,
-              "text-background-shape": "roundrectangle",
-            },
-          },
-          {
-            selector: "edge",
-            style: {
-              width: "mapData(weight, 1, 40, 1.4, 6)",
-              "line-color": "rgba(148, 163, 184, 0.52)",
-              "curve-style": "taxi",
-              "taxi-direction": "vertical",
-              "taxi-turn": 30,
-              opacity: 0.82,
-              "transition-property": "opacity, line-color, width",
-              "transition-duration": "180ms",
-            },
-          },
-          {
-            selector: ".is-selected",
-            style: {
-              opacity: 1,
-            },
-          },
-          {
-            selector: "node.is-selected",
-            style: {
-              "border-width": 4,
-              "border-color": "#0f172a",
-              label: "data(fullLabel)",
-              "font-size": 11,
-              "text-max-width": 180,
-              "z-index": 999,
-            },
-          },
-          {
-            selector: "node.is-neighbor",
-            style: {
-              "border-width": 3,
-              "border-color": "#1d4ed8",
-              opacity: 1,
-            },
-          },
-          {
-            selector: "edge.is-neighbor",
-            style: {
-              "line-color": "rgba(37, 99, 235, 0.78)",
-              opacity: 0.95,
-            },
-          },
-          {
-            selector: ".is-dimmed",
-            style: {
-              opacity: 0.12,
-            },
-          },
-        ];
+            // 2. Initialize or Update Graph
+            if (!Graph) {
+              const container = document.getElementById("graph-container");
+              Graph = ForceGraph3D()(container)
+                .graphData(graphData)
+                .backgroundColor("#090d16")
+                .showNavInfo(false)
+                .nodeVal(node => node.sizeVal)
+                .nodeColor(node => {
+                  if (highlightNodes.size > 0 && !highlightNodes.has(node.id)) {
+                    return "rgba(50, 60, 80, 0.25)"; // Dimmed nodes
+                  }
+                  return node.color;
+                })
+                .nodeOpacity(0.95)
+                .nodeResolution(24)
+                .linkLabel(link => `${link.source.label || link.source} → ${link.target.label || link.target} (Weight: ${link.weight})`)
+                .linkWidth(link => {
+                  const baseWidth = Math.min(link.weight || 1, 15) / 4;
+                  return highlightLinks.has(link) ? baseWidth * 2.2 : baseWidth;
+                })
+                .linkColor(link => {
+                  if (highlightLinks.size > 0 && !highlightLinks.has(link)) {
+                    return "rgba(50, 60, 80, 0.08)"; // Dimmed links
+                  }
+                  return highlightLinks.has(link) ? "#fbbf24" : "rgba(148, 163, 184, 0.4)";
+                })
+                .linkDirectionalParticles(link => highlightLinks.has(link) ? 3 : 0)
+                .linkDirectionalParticleWidth(1.8)
+                .linkDirectionalParticleSpeed(0.015)
+                .nodeLabel(node => {
+                  const typeLabel = node.type.toUpperCase();
+                  const countLabel = node.count ? `<br/>Mentions: ${node.count}` : "";
+                  const sentimentLabel = node.sentiment ? `<br/>Avg Sentiment: ${node.sentiment > 0 ? '+' : ''}${node.sentiment}` : "";
+                  return `<div class="graph-tooltip"><strong>${node.fullLabel}</strong> [${typeLabel}]${countLabel}${sentimentLabel}</div>`;
+                })
+                .onNodeClick(node => {
+                  // Centered camera animation on clicked node
+                  const distance = 96;
+                  const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+                  Graph.cameraPosition(
+                    { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }, // target position
+                    node, // lookAt node
+                    1200  // transition duration (ms)
+                  );
 
-        const layoutOptions = (name, normalized, positions) => {
-          if (name === "lanes") {
-            return {
-              name: "preset",
-              positions,
-              fit: false,
-              padding: 40,
-              animate: true,
-              animationDuration: 420,
-            };
-          }
+                  // Update selection & highlight neighbors
+                  selectedNodeId = node.id;
+                  updateHighlights(node);
+                  post("nodeTapped", node.id);
+                })
+                .onBackgroundClick(() => {
+                  selectedNodeId = null;
+                  clearHighlights();
+                  post("nodeTapped", "");
+                });
 
-          if (name === "breadthfirst") {
-            return {
-              name: "breadthfirst",
-              roots: cy
-                .nodes()
-                .filter((node) => node.data("type") === "category"),
-              fit: true,
-              padding: 50,
-              spacingFactor: 1.1,
-              directed: true,
-              animate: true,
-              animationDuration: 420,
-            };
-          }
-
-          if (name === "concentric") {
-            return {
-              name: "concentric",
-              fit: true,
-              padding: 50,
-              animate: true,
-              animationDuration: 420,
-              spacingFactor: 1.08,
-              concentric: (node) =>
-                node.data("type") === "category"
-                  ? 5000
-                  : Number(node.data("metric") || 0),
-              levelWidth: () => 300,
-            };
-          }
-
-          if (name === "circle") {
-            return {
-              name: "circle",
-              fit: true,
-              padding: 50,
-              animate: true,
-              animationDuration: 420,
-              spacingFactor: 1.25,
-            };
-          }
-
-          return {
-            name: "cose",
-            fit: true,
-            padding: 40,
-            animate: "end",
-            animationDuration: 420,
-            idealEdgeLength: 180,
-            nodeRepulsion: 420000,
-            gravity: 0.28,
-            numIter: 1200,
-          };
-        };
-
-        const clearClasses = () => {
-          if (!cy) {
-            return;
-          }
-
-          cy.elements().removeClass("is-selected is-neighbor is-dimmed");
-        };
-
-        const applySelection = (nodeId) => {
-          if (!cy) {
-            return;
-          }
-
-          clearClasses();
-
-          if (!nodeId) {
-            return;
-          }
-
-          const selected = cy.getElementById(nodeId);
-          if (!selected || selected.empty()) {
-            return;
-          }
-
-          const neighboringEdges = selected.connectedEdges();
-          const neighboringNodes = neighboringEdges
-            .connectedNodes()
-            .union(selected);
-          const highlighted = neighboringNodes.union(neighboringEdges);
-
-          cy.elements().difference(highlighted).addClass("is-dimmed");
-          neighboringEdges.addClass("is-neighbor");
-          neighboringNodes.difference(selected).addClass("is-neighbor");
-          selected.addClass("is-selected");
-          cy.animate({ center: { eles: selected }, duration: 220 });
-        };
-
-        const mountEvents = () => {
-          cy.on("tap", "node", (event) => {
-            const nodeId = event.target.id();
-            applySelection(nodeId);
-            post("nodeTapped", nodeId);
-          });
-
-          cy.on("tap", (event) => {
-            if (event.target === cy) {
-              applySelection(null);
-              post("nodeTapped", "");
-            }
-          });
-        };
-
-        window.updateGraph = (payload, layoutName, selectedNodeId) => {
-          try {
-            if (typeof cytoscape === "undefined") {
-              post("graphError", "Bundled Cytoscape runtime is unavailable.");
-              return;
-            }
-
-            const normalized = normalizePayload(payload);
-            const elements = [...normalized.nodes, ...normalized.edges];
-
-            if (!cy) {
-              cy = cytoscape({
-                container: document.getElementById("cy"),
-                elements,
-                style: styles(),
-                minZoom: 0.38,
-                maxZoom: 2.8,
-                wheelSensitivity: 0.24,
-                boxSelectionEnabled: false,
-                selectionType: "single",
-              });
-              mountEvents();
+              // Apply fine-tuned 3D forces
+              const linkForce = Graph.d3Force("link");
+              if (linkForce) {
+                linkForce.distance(link => link.source.type === "category" || link.target.type === "category" ? 64 : 110);
+              }
+              const chargeForce = Graph.d3Force("charge");
+              if (chargeForce) {
+                chargeForce.strength(-140);
+              }
             } else {
-              cy.batch(() => {
-                cy.elements().remove();
-                cy.add(elements);
-              });
+              Graph.graphData(graphData);
             }
 
-            clearClasses();
-            const positions =
-              layoutName === "lanes" ? presetPositions(normalized) : null;
-            const layout = cy.layout(
-              layoutOptions(layoutName, normalized, positions),
-            );
-
-            layout.one("layoutstop", () => {
-              if (layoutName === "lanes" && positions) {
-                applyLaneViewport(normalized, positions);
+            // Apply highlights if a node was pre-selected
+            if (selectedNodeId) {
+              const node = graphData.nodes.find(n => n.id === selectedNodeId);
+              if (node) {
+                updateHighlights(node);
+                // Center on it after loading
+                setTimeout(() => {
+                  const distance = 110;
+                  const distRatio = 1 + distance / Math.hypot(node.x || 1, node.y || 1, node.z || 1);
+                  Graph.cameraPosition({ x: (node.x || 1) * distRatio, y: (node.y || 1) * distRatio, z: (node.z || 1) * distRatio }, node, 800);
+                }, 400);
               }
+            } else {
+              clearHighlights();
+            }
 
-              if (selectedNodeId) {
-                applySelection(selectedNodeId);
-              }
-
-              post(
-                "graphReady",
-                `${normalized.nodes.length} nodes · ${normalized.edges.length} edges`,
-              );
-            });
-
-            layout.run();
+            post("graphReady", `${nodes.length} nodes · ${links.length} connections`);
           } catch (error) {
-            post("graphError", error?.message || "Graph render failed.");
+            post("graphError", error?.message || "3D Graph render failed.");
           }
         };
 
-        window.setSelectedNode = (selectedNodeId) => {
+        const updateHighlights = (node) => {
+          highlightNodes.clear();
+          highlightLinks.clear();
+
+          if (node) {
+            highlightNodes.add(node.id);
+            graphData.links.forEach(link => {
+              const sourceId = link.source.id || link.source;
+              const targetId = link.target.id || link.target;
+              if (sourceId === node.id) {
+                highlightNodes.add(targetId);
+                highlightLinks.add(link);
+              } else if (targetId === node.id) {
+                highlightNodes.add(sourceId);
+                highlightLinks.add(link);
+              }
+            });
+          }
+
+          // Trigger color & link re-evaluations
+          Graph.nodeColor(Graph.nodeColor());
+          Graph.linkColor(Graph.linkColor());
+          Graph.linkWidth(Graph.linkWidth());
+          Graph.linkDirectionalParticles(Graph.linkDirectionalParticles());
+        };
+
+        const clearHighlights = () => {
+          highlightNodes.clear();
+          highlightLinks.clear();
+          if (Graph) {
+            Graph.nodeColor(Graph.nodeColor());
+            Graph.linkColor(Graph.linkColor());
+            Graph.linkWidth(Graph.linkWidth());
+            Graph.linkDirectionalParticles(Graph.linkDirectionalParticles());
+          }
+        };
+
+        window.setSelectedNode = (nodeId) => {
           try {
-            applySelection(selectedNodeId || null);
+            selectedNodeId = nodeId || null;
+            if (selectedNodeId && Graph) {
+              const node = graphData.nodes.find(n => n.id === selectedNodeId);
+              if (node) {
+                updateHighlights(node);
+                const distance = 96;
+                const distRatio = 1 + distance / Math.hypot(node.x || 1, node.y || 1, node.z || 1);
+                Graph.cameraPosition({ x: (node.x || 1) * distRatio, y: (node.y || 1) * distRatio, z: (node.z || 1) * distRatio }, node, 800);
+              }
+            } else {
+              clearHighlights();
+            }
             post("graphReady", "selection-updated");
           } catch (error) {
-            post(
-              "graphError",
-              error?.message || "Failed to update graph selection.",
-            );
+            post("graphError", error?.message || "Failed to update 3D graph selection.");
           }
         };
+
+        // Resize handler
+        window.addEventListener("resize", () => {
+          if (Graph) {
+            Graph.width(window.innerWidth);
+            Graph.height(window.innerHeight);
+          }
+        });
       })();
     </script>
   </body>
