@@ -80,10 +80,12 @@
           return false;
         };
 
-        // Determine node size based on size parameter
-        const getNodeSizeVal = (sizeVal) => {
+        // Determine node size based on size parameter and type for better tap targets
+        const getNodeSizeVal = (sizeVal, type) => {
           const val = Number(sizeVal || 15);
-          return Math.max(3.5, Math.min(15, val / 4.8));
+          const base = Math.max(6, Math.min(22, val / 2.8));
+          if (type === "category") return base * 1.8; // Category hubs are prominent anchors
+          return base;
         };
 
         window.updateGraph = (payload, layoutName, initialSelectedId) => {
@@ -101,7 +103,6 @@
 
             const nodes = rawNodes.map(node => {
               const d = node.data || {};
-              // Determine category colors
               const typeColors = {
                 category: d.color || "#8b5cf6",
                 topic: "#64748b",
@@ -118,15 +119,15 @@
                 label: d.label || d.id,
                 fullLabel: d.full_label || d.label || d.id,
                 type: d.type || "topic",
-                sizeVal: getNodeSizeVal(d.size),
+                sizeVal: getNodeSizeVal(d.size, d.type),
                 color: color,
                 count: d.count || 0,
                 sentiment: d.sentiment || 0,
-                categories: d.categories || ""
+                categories: d.categories || "",
+                avg_ts: Number(d.avg_ts || 0.0)
               };
             });
 
-            // Map edges to links
             const links = rawEdges.map(edge => {
               const d = edge.data || {};
               return {
@@ -139,7 +140,138 @@
 
             graphData = { nodes, links };
 
-            // 2. Initialize or Update Graph
+            // 2. Compute Custom Layout Positions
+            const applyLayout = (layout) => {
+              // Reset all fixed coordinates first
+              nodes.forEach(n => {
+                n.fx = undefined;
+                n.fy = undefined;
+                n.fz = undefined;
+              });
+
+              if (layout === "lanes") {
+                const categoryNodes = nodes.filter(n => n.type === "category");
+                const categoryMap = {};
+                categoryNodes.forEach((cat, idx) => {
+                  categoryMap[cat.id] = idx;
+                });
+                const numCats = Math.max(1, categoryNodes.length);
+
+                // Place category hubs in a circular ring
+                const laneRadius = 140;
+                categoryNodes.forEach((cat, idx) => {
+                  const theta = (idx / numCats) * 2 * Math.PI;
+                  cat.fx = laneRadius * Math.cos(theta);
+                  cat.fy = 40; // slightly raised
+                  cat.fz = laneRadius * Math.sin(theta);
+                  cat.x = cat.fx; cat.y = cat.fy; cat.z = cat.fz;
+                });
+
+                // Group other nodes by category
+                const laneGroups = {};
+                nodes.forEach(node => {
+                  if (node.type === "category") return;
+                  let primaryCat = "default";
+                  if (node.categories) {
+                    const cats = node.categories.split(",").map(c => c.trim()).filter(Boolean);
+                    if (cats.length > 0) {
+                      primaryCat = "cat:" + cats[0];
+                    }
+                  }
+                  if (!laneGroups[primaryCat]) {
+                    laneGroups[primaryCat] = [];
+                  }
+                  laneGroups[primaryCat].push(node);
+                });
+
+                // Arrange nodes in vertical lanes below category hubs, sorted by time
+                Object.keys(laneGroups).forEach(catId => {
+                  const catIdx = categoryMap[catId] !== undefined ? categoryMap[catId] : numCats;
+                  const theta = catIdx === numCats ? 0 : (catIdx / numCats) * 2 * Math.PI;
+                  const baseX = catIdx === numCats ? 0 : laneRadius * Math.cos(theta);
+                  const baseZ = catIdx === numCats ? 0 : laneRadius * Math.sin(theta);
+
+                  const groupNodes = laneGroups[catId];
+                  groupNodes.sort((a, b) => a.avg_ts - b.avg_ts); // older at bottom, newer at top
+
+                  groupNodes.forEach((node, idx) => {
+                    const yOffset = (idx - (groupNodes.length - 1) / 2) * 16;
+                    node.fx = baseX + Math.sin(idx) * 6;
+                    node.fy = yOffset - 30;
+                    node.fz = baseZ + Math.cos(idx) * 6;
+                    node.x = node.fx; node.y = node.fy; node.z = node.fz;
+                  });
+                });
+              } else if (layout === "breadthfirst" || layout === "levels") {
+                // Layered Hierarchy
+                const layer0 = nodes.filter(n => n.type === "category");
+                const layer1 = nodes.filter(n => n.type === "topic");
+                const layer2 = nodes.filter(n => n.type !== "category" && n.type !== "topic");
+
+                const layoutLayerCircle = (layerNodes, yLevel, radius) => {
+                  const count = Math.max(1, layerNodes.length);
+                  layerNodes.sort((a, b) => a.avg_ts - b.avg_ts);
+                  layerNodes.forEach((node, idx) => {
+                    const theta = (idx / count) * 2 * Math.PI;
+                    node.fx = radius * Math.cos(theta);
+                    node.fy = yLevel;
+                    node.fz = radius * Math.sin(theta);
+                    node.x = node.fx; node.y = node.fy; node.z = node.fz;
+                  });
+                };
+
+                layoutLayerCircle(layer0, 90, 45);    // Categories: top
+                layoutLayerCircle(layer1, 0, 110);    // Topics: middle
+                layoutLayerCircle(layer2, -90, 160);  // Entities: bottom
+              } else if (layout === "concentric" || layout === "orbit") {
+                // Concentric shells, categories inner, topics outer sorted by time
+                const sortedNodes = [...nodes].sort((a, b) => b.count - a.count);
+                const categories = sortedNodes.filter(n => n.type === "category");
+                const others = sortedNodes.filter(n => n.type !== "category");
+
+                categories.forEach((node, i) => {
+                  const theta = (i / Math.max(1, categories.length)) * 2 * Math.PI;
+                  const phi = Math.acos(-1 + (2 * i) / Math.max(1, categories.length));
+                  const r = 25;
+                  node.fx = r * Math.sin(phi) * Math.cos(theta);
+                  node.fy = r * Math.sin(phi) * Math.sin(theta);
+                  node.fz = r * Math.cos(phi);
+                  node.x = node.fx; node.y = node.fy; node.z = node.fz;
+                });
+
+                others.sort((a, b) => b.avg_ts - a.avg_ts); // newest inner, oldest outer
+                others.forEach((node, i) => {
+                  const shell = i % 3;
+                  const r = 60 + shell * 50;
+                  const countInShell = Math.ceil(others.length / 3);
+                  const indexInShell = Math.floor(i / 3);
+
+                  const theta = (indexInShell / countInShell) * 2 * Math.PI;
+                  const phi = Math.acos(-1 + (2 * indexInShell) / countInShell);
+
+                  node.fx = r * Math.sin(phi) * Math.cos(theta);
+                  node.fy = r * Math.sin(phi) * Math.sin(theta);
+                  node.fz = r * Math.cos(phi);
+                  node.x = node.fx; node.y = node.fy; node.z = node.fz;
+                });
+              } else if (layout === "circle" || layout === "timeline") {
+                // Temporal Helix Spiral (Z-Axis represents time progress)
+                const sortedNodes = [...nodes].sort((a, b) => a.avg_ts - b.avg_ts);
+                const N = sortedNodes.length;
+                sortedNodes.forEach((node, i) => {
+                  const theta = (i / N) * 2 * Math.PI * 3.5;
+                  const radius = 100 - (i / N) * 30;
+                  node.fx = radius * Math.cos(theta);
+                  node.fy = (i / N) * 240 - 120; // Vertical climb represents time progression
+                  node.fz = radius * Math.sin(theta);
+                  node.x = node.fx; node.y = node.fy; node.z = node.fz;
+                });
+              }
+            };
+
+            applyLayout(layoutName);
+
+            // 3. Initialize or Update Graph
             if (!Graph) {
               const container = document.getElementById("graph-container");
               Graph = ForceGraph3D()(container)
@@ -149,7 +281,7 @@
                 .nodeVal(node => node.sizeVal)
                 .nodeColor(node => {
                   if (highlightNodes.size > 0 && !highlightNodes.has(node.id)) {
-                    return "rgba(50, 60, 80, 0.25)"; // Dimmed nodes
+                    return "rgba(40, 50, 70, 0.12)"; // Dimmed nodes
                   }
                   return node.color;
                 })
@@ -157,17 +289,17 @@
                 .nodeResolution(24)
                 .linkLabel(link => `${link.source.label || link.source} → ${link.target.label || link.target} (Weight: ${link.weight})`)
                 .linkWidth(link => {
-                  const baseWidth = Math.min(link.weight || 1, 15) / 4;
-                  return highlightLinks.has(link) ? baseWidth * 2.2 : baseWidth;
+                  const baseWidth = Math.min(link.weight || 1, 15) / 3;
+                  return highlightLinks.has(link) ? baseWidth * 2.5 : baseWidth;
                 })
                 .linkColor(link => {
                   if (highlightLinks.size > 0 && !highlightLinks.has(link)) {
-                    return "rgba(50, 60, 80, 0.08)"; // Dimmed links
+                    return "rgba(30, 40, 50, 0.04)"; // Dimmed links
                   }
-                  return highlightLinks.has(link) ? "#fbbf24" : "rgba(148, 163, 184, 0.4)";
+                  return highlightLinks.has(link) ? "#fbbf24" : "rgba(148, 163, 184, 0.3)";
                 })
                 .linkDirectionalParticles(link => highlightLinks.has(link) ? 3 : 0)
-                .linkDirectionalParticleWidth(1.8)
+                .linkDirectionalParticleWidth(2.0)
                 .linkDirectionalParticleSpeed(0.015)
                 .nodeLabel(node => {
                   const typeLabel = node.type.toUpperCase();
@@ -180,9 +312,9 @@
                   const distance = 96;
                   const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
                   Graph.cameraPosition(
-                    { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }, // target position
-                    node, // lookAt node
-                    1200  // transition duration (ms)
+                    { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+                    node,
+                    1200
                   );
 
                   // Update selection & highlight neighbors
@@ -195,18 +327,23 @@
                   clearHighlights();
                   post("nodeTapped", "");
                 });
-
-              // Apply fine-tuned 3D forces
-              const linkForce = Graph.d3Force("link");
-              if (linkForce) {
-                linkForce.distance(link => link.source.type === "category" || link.target.type === "category" ? 64 : 110);
-              }
-              const chargeForce = Graph.d3Force("charge");
-              if (chargeForce) {
-                chargeForce.strength(-140);
-              }
             } else {
               Graph.graphData(graphData);
+            }
+
+            // Adjust simulation forces based on whether physics is required
+            if (layoutName === "cose" || layoutName === "force") {
+              const linkForce = Graph.d3Force("link");
+              if (linkForce) linkForce.distance(110);
+              const chargeForce = Graph.d3Force("charge");
+              if (chargeForce) chargeForce.strength(-140);
+              Graph.d3ReheatSimulation();
+            } else {
+              const linkForce = Graph.d3Force("link");
+              if (linkForce) linkForce.distance(0);
+              const chargeForce = Graph.d3Force("charge");
+              if (chargeForce) chargeForce.strength(0);
+              Graph.cooldownTicks(0); // Lock positions instantly
             }
 
             // Apply highlights if a node was pre-selected
@@ -214,7 +351,6 @@
               const node = graphData.nodes.find(n => n.id === selectedNodeId);
               if (node) {
                 updateHighlights(node);
-                // Center on it after loading
                 setTimeout(() => {
                   const distance = 110;
                   const distRatio = 1 + distance / Math.hypot(node.x || 1, node.y || 1, node.z || 1);
@@ -250,7 +386,6 @@
             });
           }
 
-          // Trigger color & link re-evaluations
           Graph.nodeColor(Graph.nodeColor());
           Graph.linkColor(Graph.linkColor());
           Graph.linkWidth(Graph.linkWidth());

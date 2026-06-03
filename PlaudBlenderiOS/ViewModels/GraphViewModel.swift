@@ -84,7 +84,8 @@ final class GraphViewModel {
                     String(format: "%.2f", $0.size),
                     "\($0.count ?? -1)",
                     "\($0.mentionCount ?? -1)",
-                    $0.categories.joined(separator: ",")
+                    $0.categories.joined(separator: ","),
+                    "\($0.avg_ts ?? 0.0)"
                 ].joined(separator: "|")
             }
             .joined(separator: ";")

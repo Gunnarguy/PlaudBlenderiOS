@@ -47,6 +47,7 @@ struct GraphNode: Identifiable, Encodable, Sendable {
     let categories: [String]
     let mentionCount: Int?
     let sentiment: Double?
+    let avg_ts: Double?
 
     init(from dict: [String: JSONValue]) {
         self.id = dict["id"]?.stringValue ?? UUID().uuidString
@@ -62,6 +63,7 @@ struct GraphNode: Identifiable, Encodable, Sendable {
             .filter { !$0.isEmpty } ?? []
         self.mentionCount = dict["mention_count"]?.intValue
         self.sentiment = dict["sentiment"]?.doubleValue
+        self.avg_ts = dict["avg_ts"]?.doubleValue
     }
 
     var metricValue: Int? {
